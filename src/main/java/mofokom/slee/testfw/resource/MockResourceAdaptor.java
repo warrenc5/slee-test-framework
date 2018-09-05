@@ -24,6 +24,7 @@ import java.util.Properties;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.math.BigInteger;
+import java.net.URL;
 import java.util.List;
 import java.util.Timer;
 import javax.slee.transaction.SleeTransaction;
@@ -38,9 +39,9 @@ import javax.slee.facilities.Tracer;
 import javax.slee.resource.*;
 import javax.slee.transaction.SleeTransactionManager;
 import mofokom.slee.testfw.MockSlee;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
-import static org.hamcrest.CoreMatchers.notNullValue;
-import static org.hamcrest.MatcherAssert.assertThat;
 
 public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE, ACI> extends SleeComponent {
 
@@ -84,7 +85,6 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         init();
         setup();
 
-
     }
 
     public void init() {
@@ -122,26 +122,29 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
             public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
                 String mn = method.getName().substring(3);
-                if (method.getName().startsWith("set"))
+                if (method.getName().startsWith("set")) {
                     increment(mn, (Long) args[0]);
-                else if (method.getName().startsWith("get")) {
+                } else if (method.getName().startsWith("get")) {
                     Object o = use.get(mn);
-                    if (o instanceof BigInteger)
+                    if (o instanceof BigInteger) {
                         return ((BigInteger) o).longValue();
+                    }
 
                     List<BigInteger> l = getSample(mn);
                     return getSampleStatistics(l);
 
-                } else if (method.getName().startsWith("sample"))
+                } else if (method.getName().startsWith("sample")) {
                     sample(method.getName().substring(6), (Long) args[0]);
+                }
 
                 return null;
             }
 
             private void increment(String mn, Long aLong) {
                 BigInteger bi = use.get(mn);
-                if (bi == null)
+                if (bi == null) {
                     bi = BigInteger.ZERO;
+                }
                 bi.add(BigInteger.valueOf(aLong));
                 use.put(mn, bi);
             }
@@ -163,7 +166,6 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         timer = new Timer();
 
         //TODO load default Config Properties.
-
         // ABSTRACT RA METHODS
         Answer loggingAnswer = new LoggingAnswer();
 
@@ -177,8 +179,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
                 Object activity = invocation.getArguments()[i++];
                 Address address = (Address) invocation.getArguments()[i++];
                 ReceivableService service = (ReceivableService) invocation.getArguments()[i++];
-                if (activity == null)
+                if (activity == null) {
                     throw new NullPointerException("activity is null");
+                }
                 MockResourceAdaptor.this.onAnyEvent(handle, eventType, activity, address, service);
                 return null;
             }
@@ -252,7 +255,6 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
          * doCallRealMethod().when(ra).getActivityHandle(any(java.lang.Object.class));
          *
          */
-
         // RA SBB INTERFACE METHODS
         /*
          * activityEnded(javax.slee.resource.ActivityHandle);
@@ -268,13 +270,12 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
          * serviceStopping(javax.slee.resource.ReceivableService);
          * serviceInactive(javax.slee.resource.ReceivableService);
          */
-
         checkDefaultUsageParameterSetIsAssignableFromContext();
         setup = true;
     }
 
     private void checkDefaultUsageParameterSetIsAssignableFromContext() {
-        assert (usageClass.isAssignableFrom(getContext().getDefaultUsageParameterSet().getClass()));
+        assertTrue(usageClass.isAssignableFrom(getContext().getDefaultUsageParameterSet().getClass()));
     }
 
     public void doCallRealMethods(Class clazz) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException, Exception {
@@ -283,15 +284,19 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
     public static Object getAny(Class<? extends Object> c) {
         //log.info(c.toString());
-        if (c.equals(Boolean.class))
+        if (c.equals(Boolean.class)) {
             return anyBoolean();
-        if (c.equals(List.class))
+        }
+        if (c.equals(List.class)) {
             return anyList();
-        if (c.equals(String.class))
+        }
+        if (c.equals(String.class)) {
             return anyString();
-        if (c.equals(Integer.TYPE))
-            //log.info("****"  + c.toString());
+        }
+        if (c.equals(Integer.TYPE)) //log.info("****"  + c.toString());
+        {
             return anyInt();
+        }
 
         return any(c);
     }
@@ -299,8 +304,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     public void listRaMethods() {
         StringBuilder bob = new StringBuilder();
         for (Method m : ra.getClass().getMethods()) {
-            if (filterMethod(m))
+            if (filterMethod(m)) {
                 continue;
+            }
             //System.out.println("dc = " + Arrays.asList((Class[])m.getDeclaringClass().getInterfaces()));
             bob.append("doCallRealMethod().when(ra.getResourceAdaptor())." + m.getName() + "( ");
             for (Class c : m.getParameterTypes()) {
@@ -315,8 +321,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         Class clazz = sbbInterfaceClass;
         StringBuilder bob = new StringBuilder();
         for (Method m : clazz.getMethods()) {
-            if (filterMethod(m))
+            if (filterMethod(m)) {
                 continue;
+            }
             //System.out.println("dc = " + Arrays.asList((Class[])m.getDeclaringClass().getInterfaces()));
             bob.append("doCallRealMethod().when(ra.getSbbInterface())." + m.getName() + "( ");
             for (Class c : m.getParameterTypes()) {
@@ -356,13 +363,17 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     }
 
     public void configureFromProperties(String classpathLocation) throws IOException {
-        InputStream in = this.getClass().getClassLoader().getResourceAsStream(classpathLocation);
+        URL url = this.getClass().getClassLoader().getResource(classpathLocation);
+        if (url == null) {
+            throw new NullPointerException(classpathLocation);
+        }
+
         log.info("configuring from properties : " + classpathLocation);
-        this.configureFromProperties(in);
+        this.configureFromProperties(url.openStream());
     }
 
     public void configureFromProperties(InputStream propertiesInputStream) throws IOException {
-        assertThat(propertiesInputStream,notNullValue());
+        assertNotNull(propertiesInputStream);
         Properties properties = new Properties();
         properties.load(propertiesInputStream);
         this.configureFromProperties(properties);
@@ -397,12 +408,13 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
     public SBB getSbbInterface() {
         // verify(ra).raActive();
-        assertThat(ra,notNullValue());
-        assertThat(sbbInterfaceClass,notNullValue());
+        assertNotNull(ra);
+        assertNotNull(sbbInterfaceClass);
 
-        if (sbbInterface != null)
+        if (sbbInterface != null) {
             return sbbInterface;
-        
+        }
+
         Object o = ra.getResourceAdaptorInterface(sbbInterfaceClass.getName());
 
         if (o != null) {
@@ -476,8 +488,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
             doReturn(ra.getActivity(handle)).when(aci).getActivity();
             handleMap.put(handle, aci);
 
-        } else
+        } else {
             aci = handleMap.get(handle);
+        }
 
         EventContext ec = mock(EventContext.class);
         doReturn(address).when(ec).getAddress();
@@ -486,10 +499,12 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
             Class[] p = m.getParameterTypes();
             if (p[0].equals(event.getClass()) && p[1].equals(ActivityContextInterface.class)) {
                 slog.info("invoking " + m.toGenericString());
-                if (p.length == 2)
+                if (p.length == 2) {
                     m.invoke(sbb, new Object[]{event, aci});
-                if (p.length == 3)
+                }
+                if (p.length == 3) {
                     m.invoke(sbb, new Object[]{event, aci, ec});
+                }
             }
         }
     }
@@ -497,7 +512,6 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     private boolean filterMethod(Method m) {
         List<Method> mf = Arrays.asList((Method[]) org.mockito.cglib.proxy.Factory.class.getMethods());
         List<Method> ra = Arrays.asList((Method[]) ResourceAdaptor.class.getMethods());
-
 
         return (m.getDeclaringClass().equals(javax.slee.resource.ResourceAdaptor.class)
                 || ra.contains(m)
@@ -546,8 +560,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
             LogManager.getLogManager().reset();
             LogManager.getLogManager().readConfiguration(is);
             System.err.println("Logging Initialized");
-        } else
+        } else {
             System.err.println("Logging NOT Initialized");
+        }
 
         is = loader.getResourceAsStream("log4j.properties");
 
@@ -556,8 +571,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
             properties.load(is);
             org.apache.log4j.PropertyConfigurator.configure(properties);
             System.err.println("Log4j Initialized");
-        } else
+        } else {
             System.err.println("Log4j NOT Initialized");
+        }
     }
 
     public void setEntityName(String string) {
@@ -568,11 +584,12 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     private static Method getMethodFromTarget(Object o, Method m2) throws Exception {
         for (Method m : o.getClass().getMethods()) {
             if (m.getName().equals(m2.getName())
-                    && m2.getParameterTypes().length == m.getParameterTypes().length)
+                    && m2.getParameterTypes().length == m.getParameterTypes().length) {
                 return m;
+            }
         }
 
-        throw new Exception("can't find method " + m2  + " in " + o);
+        throw new Exception("can't find method " + m2 + " in " + o);
     }
 
     /*
@@ -585,31 +602,33 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         slog.info("ra entity " + resourceAdaptorEntityLifecycle.name());
     }
     * 
-    */
-
+     */
     public ACI getActivityContextInterfaceFactory() {
-        if (acif == null)
+        if (acif == null) {
             acif = (ACI) Proxy.newProxyInstance(this.getClass().getClassLoader(), new Class[]{aciClass}, new InvocationHandler() {
 
                 public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                    if (args == null)
+                    if (args == null) {
                         return null;
+                    }
                     log.info("get aci " + args[0]);
                     ActivityHandle h = ra.getActivityHandle(args[0]);//aciMap.get(args[0]);
-                    if (h == null)
+                    if (h == null) {
                         throw new UnrecognizedActivityException(args[0]);
+                    }
                     ActivityContextInterface r = ahMap.get(h);
-                    if (r == null)
+                    if (r == null) {
                         throw new UnrecognizedActivityException(args[0]);
+                    }
                     return r;
                 }
             });
+        }
         return acif;
-
 
     }
 
-    public void waitForEntityLifeCycle(String lifecycle){
+    public void waitForEntityLifeCycle(String lifecycle) {
         //TODO:
     }
 
@@ -621,8 +640,9 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         public Object answer(InvocationOnMock invocation) throws Throwable {
             log.info(invocation.getMethod().getName() + " " + Arrays.asList(invocation.getArguments()).toString());
             for (Object o : invocation.getArguments()) {
-                if (o instanceof Throwable)
+                if (o instanceof Throwable) {
                     ((Throwable) o).printStackTrace();
+                }
             }
             return null;
         }
