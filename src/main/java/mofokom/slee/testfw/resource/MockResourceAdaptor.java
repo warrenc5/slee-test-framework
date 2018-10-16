@@ -41,6 +41,7 @@ import javax.slee.transaction.SleeTransactionManager;
 import mofokom.slee.testfw.MockSlee;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.mockito.Mockito;
 import static org.mockito.Mockito.*;
 
 public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE, ACI> extends SleeComponent {

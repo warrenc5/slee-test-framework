@@ -1,5 +1,6 @@
 package mofokom.slee.testfw.model;
 
+import java.io.Serializable;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -16,7 +17,7 @@ import org.mockito.Mockito;
  * @author wozza
  */
 @Slf4j
-public class FactoryProxy<T> {
+public class FactoryProxy<T> implements Serializable{
 
     private final Class<T> clazz;
     private Map<String, Object> map;
@@ -51,7 +52,11 @@ public class FactoryProxy<T> {
             cList.addAll(Arrays.asList(additionalProxyInterfaces));
         }
 
-        return (T) Proxy.newProxyInstance(this.getClass().getClassLoader(), cList.toArray(new Class[cList.size()]), new BeanInvocationHandler(clazz, map));
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        if (cl == null) {
+            cl = this.getClass().getClassLoader();
+        }
+        return (T) Proxy.newProxyInstance(cl, cList.toArray(new Class[cList.size()]), new BeanInvocationHandler(clazz, map));
     }
 
     public interface ext {
@@ -60,12 +65,12 @@ public class FactoryProxy<T> {
 
     }
 
-    public class BeanInvocationHandler<T> implements InvocationHandler {
+    public class BeanInvocationHandler<T> implements InvocationHandler, Serializable {
 
         Map<String, Object> state;
         Map<Class, Object> defaultMap;
         private final Class<T> clazz;
-        private final T mock;
+        private transient final T mock;
         private Object o;
 
         public BeanInvocationHandler(Class<T> c, Map<String, Object> initial) {
@@ -97,23 +102,24 @@ public class FactoryProxy<T> {
             } else if (method.getName().equals("getInnerMock")) {
                 return mock;
             } else if (method.getName().startsWith("create")) {
-                log.info(method.getDeclaringClass().getSimpleName() + "." + method.getName());
+                log.debug(method.getDeclaringClass().getSimpleName() + "." + method.getName());
                 return new FactoryProxy(method.getReturnType()).createProxy();
             } else if (method.getName().startsWith("set")) {
-                log.info(method.getDeclaringClass().getSimpleName() + "." + method.getName() + "==" + Arrays.asList(args).toString());
+                log.debug(method.getDeclaringClass().getSimpleName() + "." + method.getName() + "==" + Arrays.asList(args).toString());
                 this.state.put(method.getName().substring(3), args[0]);
                 //Object o = Mockito.doReturn(args[0]).when(mock);
                 //Method getter = clazz.getMethod("g" + method.getName().substring(1));
                 //getter.invoke(o);
             } else if (method.getName().startsWith("get")) {
-                log.info(method.getDeclaringClass().getSimpleName() + "." + method.getName());
+                log.debug(method.getDeclaringClass().getSimpleName() + "." + method.getName());
                 //if (method.getDeclaringClass().equals(ext.class)) {
                 Object o = this.state.get(method.getName().substring(3));
                 if (o == null && method.getReturnType().isPrimitive()) {
                     return defaultMap.get(method.getReturnType());
                 }
-                if(o==null)
+                if (o == null) {
                     o = this.state.get(method.getName().substring(3) + "s");
+                }
 
                 return o;
                 //}
