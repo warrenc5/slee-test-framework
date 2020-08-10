@@ -2,9 +2,10 @@
  * To change this template, choose Tools | Templates
  * and open the template in the editor.
  */
-package mofokom.slee.testfw.service;
+package mofokom.slee.testfw.mocks;
 
 import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Arrays;
@@ -13,6 +14,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
+import javax.annotation.PostConstruct;
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
@@ -25,9 +27,7 @@ import javax.slee.profile.ProfileTableActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityFactory;
 import javax.slee.serviceactivity.ServiceStartedEvent;
-import mofokom.slee.testfw.MockSlee;
-import mofokom.slee.testfw.MockUsageParameters;
-import mofokom.slee.testfw.SleeComponent;
+import mofokom.slee.testfw.NameVendorVersion;
 import static org.mockito.Mockito.*;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -36,7 +36,7 @@ import org.mockito.stubbing.Answer;
  *
  * @author wozza
  */
-public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> extends SleeComponent {
+public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> extends MockSleeComponent {
 
     public final SbbContext sbbContext;
     private final Tracer tracer;
@@ -62,21 +62,22 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private Map<String, Object> cmpMap = new HashMap<String, Object>();
     private SBB cmpProxy;
 
-    public MockSbb(Class<? extends Sbb> sbbClass) throws InstantiationException, IllegalAccessException {
-        this(sbbClass, MockSbbLocal.class, MockUsageParameters.class);
+    public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass) throws InstantiationException, IllegalAccessException {
+        this(nvv, sbbClass, MockSbbLocal.class, MockUsageParameters.class);
     }
 
-    public MockSbb(Class<? extends Sbb> sbbClass, Class<? extends SbbLocalObject> local) throws InstantiationException, IllegalAccessException {
-        this(sbbClass, local, MockUsageParameters.class);
+    public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass, Class<? extends SbbLocalObject> local) throws InstantiationException, IllegalAccessException {
+        this(nvv, sbbClass, local, MockUsageParameters.class);
     }
 
-    public MockSbb(Class<? extends Sbb> sbbClass, Class<? extends SbbLocalObject> local, Class usage) throws InstantiationException, IllegalAccessException {
+    public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass, Class<? extends SbbLocalObject> local, Class usage) throws InstantiationException, IllegalAccessException {
+        super(nvv);
         this.local = local;
         this.usage = usage;
         this.sbbClass = sbbClass;
         log = Logger.getLogger(this.getClass().getSimpleName());
 
-        sbb = (SBB) mock(sbbClass);
+        sbb = (SBB) mock(sbbClass); //TODO use proxy for abstract?
 
         /*
         cmpProxy = (SBB) Proxy.newProxyInstance(this.getClass().getClassLoader(), new Class[]{sbbClass}, new InvocationHandler() {
@@ -145,9 +146,28 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
         doCallRealMethods(sbb, javax.slee.Sbb.class);
 
+        Arrays.stream(this.sbbClass.getMethods())
+                .filter(m -> m.isAnnotationPresent(PostConstruct.class))
+                .forEach(m -> {
+                    try {
+                        MockSlee.doCallRealMethod(sbb, m);
+                        m.invoke(sbb, new Object[0]);
+                    } catch (IllegalAccessException ex) {
+                        Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                    } catch (IllegalArgumentException ex) {
+                        Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                    } catch (InvocationTargetException ex) {
+                        Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                    }
+                });
+
         slog.info("Sbb Mock starting");
         this.setupStubs();
-        sbb.setSbbContext(sbbContext);
+        try {
+            sbb.setSbbContext(sbbContext);
+        } catch (Throwable t) {
+            log.warning("abstract sbb class");
+        }
     }
 
     public void deinit() {
@@ -156,6 +176,10 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     public SBB getSbb() {
         return sbb;
+    }
+
+    public Class<? extends Sbb> getSbbClass() {
+        return this.sbbClass;
     }
 
     public SBBLOCAL getSbbLocalObject() {

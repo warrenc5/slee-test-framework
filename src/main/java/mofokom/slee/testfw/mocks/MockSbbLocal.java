@@ -1,4 +1,4 @@
-package mofokom.slee.testfw.service;
+package mofokom.slee.testfw.mocks;
 
 import javax.slee.SbbLocalObject;
 

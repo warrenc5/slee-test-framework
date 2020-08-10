@@ -1,50 +1,45 @@
-package mofokom.slee.testfw.resource;
+package mofokom.slee.testfw.mocks;
 
-import mofokom.slee.testfw.SleeComponent;
-import javax.slee.SbbContext;
-import javax.slee.Sbb;
-import javax.slee.ActivityContextInterface;
-import java.lang.reflect.InvocationTargetException;
-import java.util.logging.LogManager;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.logging.Logger;
-import java.util.Map.Entry;
-import javax.slee.EventTypeID;
-import javax.slee.resource.InvalidConfigurationException;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
-import javax.slee.usage.SampleStatistics;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
-import java.lang.reflect.Proxy;
 import java.lang.reflect.InvocationHandler;
-import java.util.Properties;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.net.URL;
-import java.util.List;
-import java.util.Timer;
-import javax.slee.transaction.SleeTransaction;
-import javax.transaction.Transaction;
-import javax.slee.resource.ConfigProperties.Property;
-import javax.slee.resource.ResourceAdaptor;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.Timer;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
 import javax.slee.*;
 import javax.slee.facilities.AlarmFacility;
 import javax.slee.facilities.EventLookupFacility;
 import javax.slee.facilities.Tracer;
 import javax.slee.resource.*;
+import javax.slee.resource.ConfigProperties.Property;
+import javax.slee.transaction.SleeTransaction;
 import javax.slee.transaction.SleeTransactionManager;
-import mofokom.slee.testfw.MockSlee;
+import javax.slee.usage.SampleStatistics;
+import javax.transaction.Transaction;
+import lombok.extern.slf4j.Slf4j;
+import mofokom.slee.testfw.NameVendorVersion;
+import mofokom.slee.testfw.resource.AnyEventHandler;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import org.mockito.Mockito;
 import static org.mockito.Mockito.*;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
-public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE, ACI> extends SleeComponent {
+@Slf4j
+public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE, ACI> extends MockSleeComponent implements AnyEventHandler {
 
     private ConfigProperties properties;
     private RA ra;
@@ -59,7 +54,6 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     private Transaction txn;
     private Timer timer;
     private AlarmFacility af;
-    private Logger log;
     private static final Logger slog = Logger.getAnonymousLogger();
     private final Class usageClass, raClass, sbbInterfaceClass;
     private String name;
@@ -71,11 +65,12 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     private final Map<ActivityHandle, ActivityContextInterface> ahMap = new HashMap<ActivityHandle, ActivityContextInterface>();
     private ACI acif;
 
-    public MockResourceAdaptor(Class<RA> raClass, Class<SBB> sbbInterfaceClass, Class<USAGE> usageClass, Class<ACI> aciClass) throws Exception {
-        this(raClass.getSimpleName(), raClass, sbbInterfaceClass, usageClass, null);
+    public MockResourceAdaptor(NameVendorVersion nvv, Class<RA> raClass, Class<SBB> sbbInterfaceClass, Class<USAGE> usageClass, Class<ACI> aciClass) throws Exception {
+        this(nvv, raClass.getSimpleName(), raClass, sbbInterfaceClass, usageClass, aciClass);
     }
 
-    public MockResourceAdaptor(String raEntityName, Class<RA> raClass, Class<SBB> sbbInterfaceClass, Class<USAGE> usageClass, Class<ACI> aciClass) throws Exception {
+    public MockResourceAdaptor(NameVendorVersion nvv, String raEntityName, Class<RA> raClass, Class<SBB> sbbInterfaceClass, Class<USAGE> usageClass, Class<ACI> aciClass) throws Exception {
+        super(nvv);
         this.name = raEntityName;
 
         this.raClass = raClass;
@@ -89,7 +84,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     }
 
     public void init() {
-        log = Logger.getLogger(this.getClass().getSimpleName());
+        //log = Logger.getLogger(this.getClass().getSimpleName());
         properties = new ConfigProperties() /*
                  * {
                  *
@@ -102,7 +97,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     }
 
     public void addProperty(String name, Object value) {
-        properties.addProperty(new Property(name, value.getClass().getName(), value));
+        properties.addProperty(createProperty(name, value));
     }
     Map<String, BigInteger> use = new HashMap<String, BigInteger>();
     Map<String, List<BigInteger>> sample = new HashMap<String, List<BigInteger>>();
@@ -177,13 +172,17 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
                 int i = 0;
                 ActivityHandle handle = (ActivityHandle) invocation.getArguments()[i++];
                 FireableEventType eventType = (FireableEventType) invocation.getArguments()[i++];
-                Object activity = invocation.getArguments()[i++];
+                Object event = invocation.getArguments()[i++];
                 Address address = (Address) invocation.getArguments()[i++];
                 ReceivableService service = (ReceivableService) invocation.getArguments()[i++];
-                if (activity == null) {
+                if (event == null) {
                     throw new NullPointerException("activity is null");
                 }
-                MockResourceAdaptor.this.onAnyEvent(handle, eventType, activity, address, service);
+
+                ActivityContextInterface aci = MockResourceAdaptor.this.createActivityContextInterface(handle);
+                EventContext ec = MockSlee.createEventContext(aci, event, address, service);
+
+                MockResourceAdaptor.this.onAnyEvent(handle, eventType, aci, ec, MockResourceAdaptor.this);
                 return null;
             }
         };
@@ -337,10 +336,26 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
     public void start() throws InvalidConfigurationException {
         //START
-        ra.setResourceAdaptorContext(context);
-        ra.raVerifyConfiguration(properties);
-        ra.raConfigure(properties);
-        ra.raActive();
+        try {
+            ra.setResourceAdaptorContext(context);
+        } catch (Exception x) {
+            log.warn("setContext", x);
+        }
+        try {
+            ra.raVerifyConfiguration(properties);
+        } catch (Exception x) {
+            log.warn("verify", x);
+        }
+        try {
+            ra.raConfigure(properties);
+        } catch (Exception x) {
+            log.warn("configure", x);
+        }
+        try {
+            ra.raActive();
+        } catch (Exception x) {
+            log.warn("activate", x);
+        }
         tracer.info(properties.toString());
     }
 
@@ -428,7 +443,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
             return sbbInterface;
         }
 
-        throw new RuntimeException("Can't get that interface from the RA");
+        throw new RuntimeException("Can't get " + sbbInterfaceClass.getName() + " interface from the RA " + ra.getClass().getName());
 
     }
 
@@ -467,7 +482,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
     }
     static Map<ActivityHandle, ActivityContextInterface> handleMap = new HashMap<ActivityHandle, ActivityContextInterface>();
 
-    public abstract void onAnyEvent(ActivityHandle handle, FireableEventType eventType, Object object, Address address, ReceivableService service);
+    public abstract void onAnyEvent(ActivityHandle handle, FireableEventType eventType, ActivityContextInterface aci, EventContext ec, MockResourceAdaptor ra);
 
     public static Sbb createSbb(Class<? extends Sbb> sbbClass) throws Exception {
         Sbb sbb = mock(sbbClass);
@@ -480,9 +495,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         return sbb;
     }
 
-    public void callSbb(Sbb sbb, ActivityHandle handle, FireableEventType eventType, Object event, Address address, ReceivableService service) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException {
-//        Method onServiceStarted(
-        //       javax.slee.serviceactivity.ServiceStartedEvent event, ActivityContextInterface aci)
+    public ActivityContextInterface createActivityContextInterface(ActivityHandle handle) {
         ActivityContextInterface aci = null;
         if (!handleMap.containsKey(handle)) {
             aci = mock(ActivityContextInterface.class);
@@ -492,22 +505,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         } else {
             aci = handleMap.get(handle);
         }
-
-        EventContext ec = mock(EventContext.class);
-        doReturn(address).when(ec).getAddress();
-
-        for (Method m : sbb.getClass().getMethods()) {
-            Class[] p = m.getParameterTypes();
-            if (p[0].equals(event.getClass()) && p[1].equals(ActivityContextInterface.class)) {
-                slog.info("invoking " + m.toGenericString());
-                if (p.length == 2) {
-                    m.invoke(sbb, new Object[]{event, aci});
-                }
-                if (p.length == 3) {
-                    m.invoke(sbb, new Object[]{event, aci, ec});
-                }
-            }
-        }
+        return aci;
     }
 
     private boolean filterMethod(Method m) {
@@ -612,12 +610,17 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
                     if (args == null) {
                         return null;
                     }
+                    Object activity = args[0];
                     log.info("get aci " + args[0]);
                     ActivityHandle h = ra.getActivityHandle(args[0]);//aciMap.get(args[0]);
                     if (h == null) {
                         throw new UnrecognizedActivityException(args[0]);
                     }
                     ActivityContextInterface r = ahMap.get(h);
+                    if (r == null && h != null) {
+                        se.startActivity(h, activity);
+                        r = ahMap.get(h);
+                    }
                     if (r == null) {
                         throw new UnrecognizedActivityException(args[0]);
                     }
@@ -631,6 +634,10 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
     public void waitForEntityLifeCycle(String lifecycle) {
         //TODO:
+    }
+
+    private Property createProperty(String name, Object value) {
+        return new Property(name, value == null ? String.class.getName() : value.getClass().getName(), value);
     }
 
     private class LoggingAnswer implements Answer {

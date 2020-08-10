@@ -5,9 +5,12 @@
  */
 package mofokom.slee.testfw;
 
+import javax.slee.EventTypeID;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 /**
  *
@@ -16,7 +19,17 @@ import lombok.Data;
 @Data
 @Builder
 @AllArgsConstructor
+@EqualsAndHashCode
+@ToString
 public class NameVendorVersion {
-    public String name,vendor,version;
 
+    public String name, vendor, version;
+
+    public static NameVendorVersion from(String name, String vendor, String version) {
+        return new NameVendorVersion(name, vendor, version);
+    }
+
+    public static NameVendorVersion from(EventTypeID eventType) {
+        return NameVendorVersion.builder().name(eventType.getName()).vendor(eventType.getVendor()).version(eventType.getVersion()).build();
+    }
 }

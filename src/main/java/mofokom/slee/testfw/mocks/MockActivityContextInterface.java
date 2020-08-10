@@ -3,7 +3,7 @@
  * To change this template file, choose Tools | Templates
  * and open the template in the editor.
  */
-package mofokom.slee.testfw.resource;
+package mofokom.slee.testfw.mocks;
 
 import javax.slee.ActivityContextInterface;
 import javax.slee.SLEEException;
@@ -11,7 +11,6 @@ import javax.slee.SbbLocalObject;
 import javax.slee.TransactionRequiredLocalException;
 import javax.slee.TransactionRolledbackLocalException;
 import javax.slee.resource.ActivityHandle;
-import mofokom.slee.testfw.MockSlee;
 
 /**
  *
