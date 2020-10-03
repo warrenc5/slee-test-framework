@@ -1,9 +1,6 @@
-/*
- * To change this template, choose Tools | Templates
- * and open the template in the editor.
- */
 package mofokom.slee.testfw.mocks;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -45,7 +42,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private final Class<? extends SbbLocalObject> local;
     private final Class<? extends Sbb> sbbClass;
     private final Class usage;
-    private SBBLOCAL sbbLocalObject;
+    private SBBLOCAL sbbLocalObject; //TODO: support cascading deletes
     private static final Logger slog = Logger.getAnonymousLogger();
     private InitialContext ic;
     private Context env;
@@ -59,8 +56,14 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private ActivityContextNamingFacility acNamingFacility;
     private NullActivityContextInterfaceFactory nullAciFactory;
 
-    private Map<String, Object> cmpMap = new HashMap<String, Object>();
+    private Map<String, Object> cmpMap = new HashMap<>();
     private SBB cmpProxy;
+
+    public Map<NameVendorVersion, MockChildRelation> childRelation = new HashMap<>();
+
+    private Map<String, NameVendorVersion> childRelationMethods = new HashMap<>();
+
+    public Map<NameVendorVersion, Method> eventHandlers = new HashMap();
 
     public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass) throws InstantiationException, IllegalAccessException {
         this(nvv, sbbClass, MockSbbLocal.class, MockUsageParameters.class);
@@ -78,6 +81,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
         log = Logger.getLogger(this.getClass().getSimpleName());
 
         sbb = (SBB) mock(sbbClass); //TODO use proxy for abstract?
+
 
         /*
         cmpProxy = (SBB) Proxy.newProxyInstance(this.getClass().getClassLoader(), new Class[]{sbbClass}, new InvocationHandler() {
@@ -142,9 +146,30 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
         MockSlee.doCallRealMethods(target, clazz);
     }
 
+    public void doCallRealMethodEventHandlers() {
+        this.eventHandlers.entrySet().forEach(e -> {
+            log.info("calling " + e.getValue().getName() + " for " + e.getKey().toString());
+            MockSlee.doCallRealMethod(sbb, e.getValue());
+        });
+    }
+
     public void init() throws Exception {
 
         doCallRealMethods(sbb, javax.slee.Sbb.class);
+
+        Arrays.stream(this.sbbClass.getMethods())
+                .filter(m
+                        -> m.getReturnType().isAssignableFrom(ChildRelation.class) && m.getName().startsWith("get"))
+                .forEach(m -> {
+
+            Object o = doAnswer(ic -> {
+                NameVendorVersion childNvv = MockSbb.this.childRelationMethods.get(ic.getMethod().getName());
+                log.info("returning child relation for " + childNvv + " child of " + this.nvv);
+                        MockChildRelation mcr = MockSbb.this.childRelation.get(childNvv);
+                return mcr.mock;
+                    }).when(sbb);
+                    MockSlee.doDangling(o, sbb, m);
+                });
 
         Arrays.stream(this.sbbClass.getMethods())
                 .filter(m -> m.isAnnotationPresent(PostConstruct.class))
@@ -195,7 +220,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                         return sbb;
                     }
 
-                    return method.invoke(sbb, args);
+                    return method.invoke(sbb, args); //TODO dynamically replace target negation implements local interface.
                 }
             });
         }
@@ -229,4 +254,69 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     public SbbContext getSbbContext() {
         return this.sbbContext;
     }
+
+    public void addCmp(Field f) {
+        Class<?> clazz = f.getDeclaringClass();
+        StringBuilder name = new StringBuilder(f.getName());
+        name.setCharAt(0, Character.toUpperCase(name.charAt(0)));
+        try {
+            addCmp(clazz.getMethod("set" + name.toString(), f.getType()));
+            addCmp(clazz.getMethod("get" + name.toString()));
+
+        } catch (NoSuchMethodException ex) {
+            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+        } catch (SecurityException ex) {
+            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+        }
+    }
+
+    public void addCmp(Method m) {
+        final String fieldName = m.getName().substring(3).toLowerCase();
+        log.info("adding cmp " + fieldName);
+        Object o = doAnswer(ic -> {
+            if (m.getName().startsWith("get")) {
+                log.info("getting cmp " + fieldName);
+                return MockSbb.this.cmpMap.get(fieldName);
+            } else if (m.getName().startsWith("set")) {
+
+                log.info("setting cmp " + fieldName);
+                MockSbb.this.cmpMap.put(fieldName, ic.getArguments()[0]);
+            }
+            return Void.TYPE;
+        }).when(sbb);
+        MockSlee.doDangling(o, sbb, m);
+    }
+
+    public MockChildRelation mockChildRelation(MockSbb parent, MockSbb sbb, NameVendorVersion nvv) {
+        MockChildRelation mockCR = new MockChildRelation(parent, sbb);
+        parent.childRelation.put(nvv, mockCR);
+        return mockCR;
+    }
+
+    public void addChildRelation(String alias, int priority, Method m) throws Exception {
+        NameVendorVersion nvv = MockSlee.getInstance().sbbAlias.get(alias);
+        if (nvv == null) {
+            throw new Exception("no sbb found for alias " + alias);
+        }
+
+        MockSbb.this.childRelationMethods.put(m.getName(), nvv);
+        MockSleeComponent mockSbb = MockSlee.getInstance().components.get(nvv);
+        MockChildRelation mockCR = mockChildRelation(this, (MockSbb) mockSbb, nvv);
+        mockCR.setPriority(priority);
+        mockCR.setAlias(alias);
+    }
+
+    public void addChildRelation(String alias, int priority, Field f) throws Exception {
+        Class<?> clazz = f.getDeclaringClass();
+        StringBuilder name = new StringBuilder(f.getName());
+        name.setCharAt(0, Character.toUpperCase(name.charAt(0)));
+        try {
+            addChildRelation(alias, priority, clazz.getMethod("get" + name.toString() + "ChildRelation"));
+        } catch (NoSuchMethodException ex) {
+            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+        } catch (SecurityException ex) {
+            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+        }
+    }
+
 }

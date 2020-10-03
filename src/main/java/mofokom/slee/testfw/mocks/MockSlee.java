@@ -23,10 +23,10 @@ import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import javax.slee.ActivityContextInterface;
 import javax.slee.Address;
-import javax.slee.ChildRelation;
 import javax.slee.EventContext;
 import javax.slee.Sbb;
 import javax.slee.SbbLocalObject;
+import javax.slee.annotation.event.EventHandler;
 import javax.slee.facilities.ActivityContextNamingFacility;
 import javax.slee.facilities.AlarmFacility;
 import javax.slee.facilities.TimerFacility;
@@ -61,13 +61,16 @@ import org.mockito.stubbing.Answer;
 @Slf4j
 public class MockSlee {
 
+    private static MockSlee instance;
+
     private Set<MockSbb> sbbs = new HashSet<>();
+    public Map<String, NameVendorVersion> sbbAlias = new HashMap<>();
     private Set<MockResourceAdaptor> ras = new HashSet<>();
     private Set<MockEvent> events = new HashSet<>();
     private Set<MockProfile> profiles = new HashSet<>();
     private Map<Object, ActivityContextInterface> acis = new HashMap<>();
     public Map<ActivityHandle, ActivityContextInterface> activities = new HashMap<>();
-    private Map<NameVendorVersion, MockSleeComponent> components = new HashMap<>();
+    public Map<NameVendorVersion, MockSleeComponent> components = new HashMap<>();
 
     private static final Logger slog = Logger.getAnonymousLogger();
     private AlarmFacility alarmFacility;
@@ -86,9 +89,22 @@ public class MockSlee {
     public Map<ActivityHandle, Object> activityMap = new HashMap();
     public Map<ActivityHandle, Set<SbbLocalObject>> sbbsA = new HashMap();
 
-    public MockSlee() throws NamingException {
-        System.setProperty("java.naming.factory.initial", NewInitialContextFactory.class.getName());
+    static {
+        if (instance == null) {
+            try {
+                instance = new MockSlee();
+            } catch (NamingException ex) {
+                log.error(ex.getMessage(), ex);
+            }
+        }
+    }
 
+    public static MockSlee getInstance() {
+        return instance;
+    }
+
+    private MockSlee() throws NamingException {
+        System.setProperty("java.naming.factory.initial", NewInitialContextFactory.class.getName());
         ic = new InitialContext();
     }
 
@@ -153,14 +169,19 @@ public class MockSlee {
 
     public static void doCallRealMethod(Object target, Method m) {
 
-        Object[] args = new Object[m.getParameterTypes().length];
-
-        int p = 0;
         Object o = null;
 
         if (o == null) {
             o = Mockito.doCallRealMethod().when(target);
         }
+
+        doDangling(o, target, m);
+    }
+
+    public static void doDangling(Object o, Object target, Method m) {
+
+        Object[] args = new Object[m.getParameterTypes().length];
+        int p = 0;
 
         for (Class c : m.getParameterTypes()) {
             args[p++] = getAny(c);
@@ -221,6 +242,16 @@ public class MockSlee {
             slog.info(sbbHome.getSbbLocalObject() + " bound to " + set.toString());
             return set.toArray(new ActivityContextInterface[set.size()]);
         }).when(sbbHome.sbbContext).getActivities();
+
+        Class clazz = sbbHome.getSbbClass();
+        Arrays.asList(clazz.getMethods()).stream()
+                .filter(m
+                        -> m.isAnnotationPresent(javax.slee.annotation.event.EventHandler.class))
+                .forEach(m -> {
+                    EventHandler a = m.getAnnotation(javax.slee.annotation.event.EventHandler.class);
+            sbbHome.eventHandlers.put(NameVendorVersion.from(a.eventType()), m);
+                });
+
         return sbbHome.getSbb();
     }
 
@@ -261,7 +292,44 @@ public class MockSlee {
                 javax.slee.annotation.Sbb sbbA = (javax.slee.annotation.Sbb) a;
                 NameVendorVersion nvv = NameVendorVersion.builder().name(sbbA.name()).vendor(sbbA.vendor()).version(sbbA.version()).build();
                 try {
-                    MockSbb mSbb = new MockSbb(nvv, clazz, sbbA.localInterface(), sbbA.usageParametersInterface());
+                    final MockSbb mSbb = new MockSbb(nvv, clazz, sbbA.localInterface(), sbbA.usageParametersInterface());
+                    MockSlee.getInstance().sbbAlias.put(sbbA.alias() == null ? nvv.toString() : sbbA.alias(), nvv);
+                    Arrays.stream(clazz.getFields()).forEach(f -> {
+                        javax.slee.annotation.CMPField cmp = f.getAnnotation(javax.slee.annotation.CMPField.class);
+                        if (cmp != null) {
+                            mSbb.addCmp(f);
+                        }
+                    });
+
+                    Arrays.stream(clazz.getMethods()).forEach(m -> {
+                        javax.slee.annotation.CMPField cmp = m.getAnnotation(javax.slee.annotation.CMPField.class);
+                        if (cmp != null) {
+                            mSbb.addCmp(m);
+                        }
+                    });
+
+                    Arrays.stream(clazz.getFields()).forEach(f -> {
+                        javax.slee.annotation.ChildRelation cr = f.getAnnotation(javax.slee.annotation.ChildRelation.class);
+                        if (cr != null) {
+                            try {
+                                mSbb.addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), f);
+                            } catch (Exception ex) {
+                                Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
+                            }
+                        }
+                    });
+
+                    Arrays.stream(clazz.getMethods()).forEach(m -> {
+                        javax.slee.annotation.ChildRelation cr = m.getAnnotation(javax.slee.annotation.ChildRelation.class);
+                        if (cr != null) {
+                            try {
+                                mSbb.addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), m);
+                            } catch (Exception ex) {
+                                Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
+                            }
+                        }
+                    });
+
                     this.add(mSbb);
                     return mSbb;
                 } catch (Exception ex) {
@@ -313,10 +381,6 @@ public class MockSlee {
         for (MockResourceAdaptor ra : ras) {
             ra.stop();
         }
-    }
-
-    public ChildRelation mockChildRelation(NameVendorVersion nvv, SbbLocalObject o) {
-        return new MockChildRelation(nvv, o).mock;
     }
 
     public ActivityContextInterface createNullActivityContextInterface() {
@@ -501,6 +565,20 @@ public class MockSlee {
             try {
                 boolean handled = deliverEvent(sbb, eventType, aci, ec);
                 h.add(handled);
+
+                //TODO sort by priority
+                sbb.childRelation.values().stream().forEach(cr -> {
+                    ((MockChildRelation) cr).mock.forEach(childSbb -> {
+                        try {
+                            boolean handled2 = deliverEvent(((MockChildRelation) childSbb).sbb, eventType, aci, ec);
+                            h.add(handled2);
+                        } catch (IllegalAccessException ex) {
+                            e.add(ex.getCause());
+                        } catch (InvocationTargetException ex) {
+                            e.add(ex.getCause());
+                        }
+                    });
+                });
             } catch (IllegalAccessException ex) {
                 e.add(ex.getCause());
             } catch (InvocationTargetException ex) {
@@ -528,6 +606,7 @@ public class MockSlee {
         Sbb sbb = mockSbb.getSbb();
         Class clazz = mockSbb.getSbbClass();
         Annotation[] annotations = clazz.getAnnotations();
+
         NameVendorVersion tNvv = NameVendorVersion.from(eventType.getEventType());
 
         Optional<Method> hm = Arrays.asList(clazz.getMethods()).stream()
@@ -543,11 +622,11 @@ public class MockSlee {
                 .findFirst();
 
         if (hm.isPresent()) {
-            log.info("handled " + tNvv + " on " + clazz);
+            log.debug("handled " + tNvv + " on " + clazz);
             this.callSbb(sbb, hm.get(), eventType, aci, ec);
             return true;
         } else {
-            log.info("no handler for " + tNvv + " on " + clazz);
+            log.debug("no handler for " + tNvv + " on " + clazz);
             return false;
         }
     }

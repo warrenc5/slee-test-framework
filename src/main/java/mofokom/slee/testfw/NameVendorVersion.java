@@ -6,6 +6,7 @@
 package mofokom.slee.testfw;
 
 import javax.slee.EventTypeID;
+import javax.slee.annotation.event.EventTypeRef;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,6 +28,10 @@ public class NameVendorVersion {
 
     public static NameVendorVersion from(String name, String vendor, String version) {
         return new NameVendorVersion(name, vendor, version);
+    }
+
+    public static NameVendorVersion from(EventTypeRef eventType) {
+        return NameVendorVersion.builder().name(eventType.name()).vendor(eventType.vendor()).version(eventType.version()).build();
     }
 
     public static NameVendorVersion from(EventTypeID eventType) {

@@ -19,6 +19,5 @@ public abstract class MockSleeComponent {
         return nvv;
     }
 
-    
 
 }
