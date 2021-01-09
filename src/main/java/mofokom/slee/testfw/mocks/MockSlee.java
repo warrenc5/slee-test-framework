@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -62,6 +63,23 @@ import org.mockito.stubbing.Answer;
 public class MockSlee {
 
     private static MockSlee instance;
+
+    private static Level commonsLevel(String level) {
+        String newLevel = level;
+        switch (level) {
+            case "TRACE":
+                newLevel = "FINEST";
+                break;
+            case "DEBUG":
+                newLevel = "FINE";
+                break;
+            case "WARNING":
+                newLevel = "SEVERE";
+                break;
+            default:
+        }
+        return Level.parse(newLevel);
+    }
 
     private Set<MockSbb> sbbs = new HashSet<>();
     public Map<String, NameVendorVersion> sbbAlias = new HashMap<>();
@@ -542,16 +560,21 @@ public class MockSlee {
     public static void setLogger(String name, String level) {
         Logger logger = LogManager.getLogManager().getLogger(name);
         if (logger != null) {
-            logger.setLevel(Level.parse("DEBUG".equals(level) ? "FINE" : level));
+            logger.setLevel(commonsLevel(level));
         }
 
         org.apache.log4j.Logger logger2 = org.apache.log4j.Logger.getLogger(name);
         if (logger2 != null) {
             logger2.setLevel(org.apache.log4j.Level.toLevel(level));
 
-            ConsoleAppender appender = (org.apache.log4j.ConsoleAppender) org.apache.log4j.Logger.getRootLogger().getAppender("A1");
-            if (appender != null) {
-                appender.setThreshold(org.apache.log4j.Level.toLevel(level));
+            for (Enumeration e = org.apache.log4j.Logger.getRootLogger().getAllAppenders(); e.hasMoreElements();) {
+                Object a = e.nextElement();
+                if (a instanceof ConsoleAppender) {
+                    ConsoleAppender appender = (org.apache.log4j.ConsoleAppender) a;
+                    if (appender != null) {
+                        appender.setThreshold(org.apache.log4j.Level.toLevel(level));
+                    }
+                }
             }
 
         }
