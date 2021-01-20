@@ -1,8 +1,3 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 package mofokom.slee.testfw.resource;
 
 import javax.slee.ActivityContextInterface;
@@ -13,6 +8,7 @@ import mofokom.slee.testfw.mocks.MockResourceAdaptor;
 import mofokom.slee.testfw.mocks.MockSlee;
 import mofokom.slee.testfw.mocks.MultiException;
 import mofokom.slee.testfw.mocks.UnhandledEventException;
+import static org.junit.jupiter.api.Assertions.fail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,13 +34,13 @@ public class DefaultEventHandler implements AnyEventHandler {
     @Override
     public void onAnyEvent(ActivityHandle handle, FireableEventType eventType, ActivityContextInterface aci, EventContext ec, MockResourceAdaptor ra) {
         try {
-            log.debug("map event" + eventType.getEventType());
+            log.debug("delivering event" + eventType.getEventType());
             slee.deliverEvent(eventType, aci, ec);
         } catch (MultiException ex) {
             log.error(ex.getMessage(), ex);
-            fail();
+            fail(ex);
         } catch (UnhandledEventException ex) {
-            log.warn(ex.getMessage());
+            log.warn(ex.getClass().getName() + " " + ex.getMessage());
         }
     }
 }

@@ -28,7 +28,7 @@ public class NewInitialContextFactory implements InitialContextFactory {
                 env = new NewContext();
                 map.put("java:comp/env", env);
             }
-            logger.info("lookup " + name);
+            logger.fine("lookup " + name);
             if (!map.containsKey(name)) {
                 throw new NamingException(name + " not found");
             }
@@ -40,12 +40,15 @@ public class NewInitialContextFactory implements InitialContextFactory {
         }
 
         public void bind(String name, Object obj) throws NamingException {
-            System.err.println("bind " + name + " " + obj);
             if (env == null) {
                 env = new NewContext();
                 map.put("java:comp/env", env);
             }
-            logger.info("bind " + name + " " + obj);
+            if (obj == null) {
+                logger.warning("bind " + name + " is null");
+            }
+
+            logger.fine("bind " + name + " " + obj);
             map.put(name, obj);
         }
 

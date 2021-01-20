@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Logger;
 import javax.annotation.PostConstruct;
@@ -148,7 +149,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     public void doCallRealMethodEventHandlers() {
         this.eventHandlers.entrySet().forEach(e -> {
-            log.info("calling " + e.getValue().getName() + " for " + e.getKey().toString());
+            log.fine("calling " + e.getValue().getName() + " for " + e.getKey().toString());
             MockSlee.doCallRealMethod(sbb, e.getValue());
         });
     }
@@ -165,8 +166,12 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
             Object o = doAnswer(ic -> {
                 NameVendorVersion childNvv = MockSbb.this.childRelationMethods.get(ic.getMethod().getName());
                 log.info("returning child relation for " + childNvv + " child of " + this.nvv);
-                        MockChildRelation mcr = MockSbb.this.childRelation.get(childNvv);
-                return mcr.mock;
+                MockChildRelation mcr = MockSbb.this.childRelation.get(childNvv);
+                if (mcr == null) {
+                    throw new Exception("can't find child relation for " + childNvv + " child of " + this.nvv + " did you add it before?");
+                }
+
+                        return mcr.mock;
                     }).when(sbb);
                     MockSlee.doDangling(o, sbb, m);
                 });
@@ -213,14 +218,30 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
             Set<Class> classes = new HashSet<>();
             classes.add(local);
             classes.add(MockSbbLocal.class);
-            sbbLocalObject = (SBBLOCAL) Proxy.newProxyInstance(this.getClass().getClassLoader(), classes.toArray(new Class[]{}), new InvocationHandler() {
+            Class<?>[] interfaces = this.getClass().getInterfaces();
+            classes.addAll(Arrays.asList(interfaces));
+
+            sbbLocalObject = (SBBLOCAL) Proxy.newProxyInstance(this.getClass().getClassLoader(), classes.toArray(new Class[classes.size()]), new InvocationHandler() {
 
                 public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                    if (method.getDeclaringClass().equals(MockSbbLocal.class)) {
-                        return sbb;
+
+                    log.info(method.toString());
+                    Object target = sbb;
+
+                    /**
+                     * if
+                     * (method.getDeclaringClass().equals(MockSbbLocal.class)) {
+                     * return sbb; }
+                     */
+                    if (!method.getDeclaringClass().isAssignableFrom(target.getClass())) {
+                        Optional<Method> m = MockSbb.this.findSameMethodOn(method, target);
+                        if (!m.isPresent()) {
+                            throw new Exception("method not found " + m.toString());
+                        }
+                        method = m.get();
                     }
 
-                    return method.invoke(sbb, args); //TODO dynamically replace target negation implements local interface.
+                    return method.invoke(target, args); //TODO dynamically replace target negation implements local interface.
                 }
             });
         }
@@ -276,7 +297,9 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
         Object o = doAnswer(ic -> {
             if (m.getName().startsWith("get")) {
                 log.info("getting cmp " + fieldName);
-                return MockSbb.this.cmpMap.get(fieldName);
+                Object v = MockSbb.this.cmpMap.get(fieldName);
+                log.info("got cmp " + fieldName + " " + v);
+                return v;
             } else if (m.getName().startsWith("set")) {
 
                 log.info("setting cmp " + fieldName);
@@ -317,6 +340,10 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
         } catch (SecurityException ex) {
             Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
         }
+    }
+
+    private Optional<Method> findSameMethodOn(Method method, Object target) {
+        return Arrays.stream(target.getClass().getMethods()).filter(m -> m.getName().equals(method.getName())).findFirst();
     }
 
 }

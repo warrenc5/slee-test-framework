@@ -30,7 +30,10 @@ import javax.slee.SbbLocalObject;
 import javax.slee.annotation.event.EventHandler;
 import javax.slee.facilities.ActivityContextNamingFacility;
 import javax.slee.facilities.AlarmFacility;
+import javax.slee.facilities.AlarmLevel;
 import javax.slee.facilities.TimerFacility;
+import javax.slee.management.Alarm;
+import javax.slee.management.NotificationSource;
 import javax.slee.nullactivity.NullActivity;
 import javax.slee.nullactivity.NullActivityContextInterfaceFactory;
 import javax.slee.nullactivity.NullActivityFactory;
@@ -40,6 +43,7 @@ import javax.slee.resource.ActivityHandle;
 import javax.slee.resource.FireableEventType;
 import javax.slee.resource.InvalidConfigurationException;
 import javax.slee.resource.ReceivableService;
+import javax.slee.resource.ResourceAdaptor;
 import javax.slee.serviceactivity.ServiceActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityFactory;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +53,8 @@ import static mofokom.slee.testfw.mocks.MockResourceAdaptor.getAny;
 import mofokom.slee.testfw.resource.AnyEventHandler;
 import mofokom.slee.testfw.service.ServiceLifecycle;
 import org.apache.log4j.ConsoleAppender;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyString;
 import org.mockito.Mockito;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -120,10 +126,13 @@ public class MockSlee {
     public static MockSlee getInstance() {
         return instance;
     }
+    private HashMap<String, ? super ResourceAdaptor> links;
+    private HashMap<String, Map<String, Alarm>> alarms;
 
     private MockSlee() throws NamingException {
         System.setProperty("java.naming.factory.initial", NewInitialContextFactory.class.getName());
         ic = new InitialContext();
+        this.links = new HashMap<>();
     }
 
     public void setupJNDI() throws NamingException {
@@ -150,9 +159,37 @@ public class MockSlee {
 
         doAnswer((iom) -> createNullActivityContextInterface()).when(this.nullActivityFactory).createNullActivity();
 
+        alarms = new HashMap<>();
+        doAnswer(ic -> {
+
+            Alarm alarm = createAlarm(ic);
+            Map<String, Alarm> alarmType = this.alarms.getOrDefault(ic.getArgumentAt(1, String.class), new HashMap<>());
+            alarmType.merge(ic.getArgumentAt(1, String.class), alarm, (k, v) -> {
+                return alarm;
+            });
+            return alarm.getAlarmID();
+        }).when(this.alarmFacility).raiseAlarm(anyString(), anyString(), any(AlarmLevel.class), anyString());
+
+        doAnswer(ic -> {
+            this.alarms.clear();
+            return null;
+        }).when(this.alarmFacility).clearAlarms();
+
+        doAnswer(ic -> {
+            Map<String, Alarm> alarmType = this.alarms.remove(ic.getArgumentAt(0, String.class));
+            return null;
+        }).when(this.alarmFacility).clearAlarms(anyString());
+
+        doAnswer(ic -> {
+            this.alarms.values().forEach(a -> {
+                a.remove(ic.getArgumentAt(0, String.class));
+            });
+            return null;
+        }).when(this.alarmFacility).clearAlarm(anyString());
     }
 
     private static void doAnswerCmp(Answer answer, Object cmpIface, Class<?> cmpInterface) {
+        //WTF?
     }
 
     //TODO: sbb handler methods
@@ -179,7 +216,11 @@ public class MockSlee {
                 if (Modifier.isProtected(m.getModifiers())) {
                     continue;
                 }
-                doCallRealMethod(target, m);
+                try {
+                    doCallRealMethod(target, m);
+                } catch (org.mockito.exceptions.misusing.UnfinishedStubbingException x) {
+                    log.warn(target.getClass() + "->" + m.getDeclaringClass().getName() + ":" + m.getName());
+                }
             }
         });
 
@@ -204,7 +245,7 @@ public class MockSlee {
         for (Class c : m.getParameterTypes()) {
             args[p++] = getAny(c);
         }
-        slog.info("calling real " + m.toString());
+        slog.fine("calling real " + m.toString());
         try {
             m.invoke(o, args);
             o = null;
@@ -241,6 +282,19 @@ public class MockSlee {
     public void add(MockResourceAdaptor ra) throws Exception {
         this.ras.add(ra);
         this.components.put(ra.getNvv(), ra);
+    }
+
+    //TODO do this for each Sbb RAType binding
+    public <RA extends ResourceAdaptor, PROV, UP, ACIF> void add(MockResourceAdaptor<RA, PROV, UP, ACIF> ra, String aciFactoryName, String raEntityLink, String sbbRaInterface) {
+
+        log.info(sbbRaInterface + " " + ra.getSbbInterface());
+        try {
+            this.ic.bind(aciFactoryName, ra.getActivityContextInterfaceFactory());
+            this.ic.bind(sbbRaInterface, ra.getSbbInterface());
+        } catch (NamingException ex) {
+            log.error(ex.getMessage(), ex);
+        }
+        this.links.put(raEntityLink, ra.getResourceAdaptor());
     }
 
     public <A extends Sbb, B extends SbbLocalObject, C> A add(MockSbb<A, B, C> sbbHome) throws Exception {
@@ -380,6 +434,7 @@ public class MockSlee {
         for (MockResourceAdaptor ra : ras) {
             try {
                 log.info("starting " + ra.nvv.toString());
+                //TODO store component state
                 ra.start();
                 log.info("started " + ra.nvv.toString());
             } catch (InvalidConfigurationException ex) {
@@ -667,6 +722,8 @@ public class MockSlee {
             } else {
                 throw new IllegalArgumentException(sbb.getClass().getSimpleName() + " " + m.getName() + " should have 2 or 3 parameters it has" + p.length);
             }
+        } else {
+            throw new IllegalArgumentException(m.toString() + " is not assignable from " + event);
         }
     }
 
@@ -698,6 +755,23 @@ public class MockSlee {
                 }
             }
         }
+    }
+
+    public Alarm createAlarm(String alarmType, String instanceId, AlarmLevel alarmLevel, String message) {
+        NotificationSource notificationSource = null;
+        Throwable cause = null;
+        return new Alarm(alarmType, notificationSource, alarmType, instanceId, alarmLevel, message, cause, 0);
+    }
+
+    private Alarm createAlarm(InvocationOnMock ic) {
+        return createAlarm(ic.getArgumentAt(0, String.class),
+                ic.getArgumentAt(1, String.class),
+                ic.getArgumentAt(2, AlarmLevel.class),
+                ic.getArgumentAt(3, String.class));
+    }
+
+    private Optional<NameVendorVersion> getComponentId(Sbb sbb) {
+        return this.components.entrySet().stream().filter(k -> k.getValue().equals(sbb)).map(k -> k.getKey()).findFirst();
     }
 
 }
