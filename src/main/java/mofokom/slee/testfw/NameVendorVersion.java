@@ -6,7 +6,7 @@
 package mofokom.slee.testfw;
 
 import javax.slee.EventTypeID;
-import javax.slee.annotation.event.EventTypeRef;
+import mobi.mofokom.javax.slee.annotation.event.EventTypeRef;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

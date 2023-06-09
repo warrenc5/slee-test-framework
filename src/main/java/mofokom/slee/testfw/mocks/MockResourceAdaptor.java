@@ -163,7 +163,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
         //TODO load default Config Properties.
         // ABSTRACT RA METHODS
-        Answer loggingAnswer = new LoggingAnswer();
+        Answer loggingAnswer = new LoggingAnswer(this.name);
 
         Answer pa2 = new Answer() {
 
@@ -548,33 +548,7 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
         return mean.doubleValue() / (double) l.size();
     }
 
-    public static void configureLogging() throws IOException {
-        configureLogging(MockResourceAdaptor.class.getClassLoader());
-    }
-
-    public static void configureLogging(ClassLoader loader) throws IOException {
-        InputStream is = loader.getResourceAsStream("logging.properties");
-
-        if (is != null) {
-            LogManager.getLogManager().reset();
-            LogManager.getLogManager().readConfiguration(is);
-            System.err.println("Logging Initialized");
-        } else {
-            System.err.println("Logging NOT Initialized");
-        }
-
-        is = loader.getResourceAsStream("log4j.properties");
-
-        if (is != null) {
-            Properties properties = new Properties();
-            properties.load(is);
-            org.apache.log4j.PropertyConfigurator.configure(properties);
-            System.err.println("Log4j Initialized");
-        } else {
-            System.err.println("Log4j NOT Initialized");
-        }
-    }
-
+    
     public void setEntityName(String string) {
         this.name = string;
         doReturn("Mock Entity " + name).when(context).getEntityName();
@@ -642,11 +616,17 @@ public abstract class MockResourceAdaptor<RA extends ResourceAdaptor, SBB, USAGE
 
     private class LoggingAnswer implements Answer {
 
+        private String name = "unknown";
+
+        public LoggingAnswer(String name) {
+            this.name = name;
+        }
+
         public LoggingAnswer() {
         }
 
         public Object answer(InvocationOnMock invocation) throws Throwable {
-            log.info(invocation.getMethod().getName() + " " + Arrays.asList(invocation.getArguments()).toString());
+            log.info(name + " " + invocation.getMethod().getName() + " " + Arrays.asList(invocation.getArguments()).toString());
             for (Object o : invocation.getArguments()) {
                 if (o instanceof Throwable) {
                     ((Throwable) o).printStackTrace();

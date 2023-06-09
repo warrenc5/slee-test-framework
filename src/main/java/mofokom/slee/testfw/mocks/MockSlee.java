@@ -1,5 +1,7 @@
 package mofokom.slee.testfw.mocks;
 
+import java.io.IOException;
+import java.io.InputStream;
 import static java.lang.Boolean.TRUE;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
@@ -8,13 +10,18 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -25,9 +32,10 @@ import javax.naming.NamingException;
 import javax.slee.ActivityContextInterface;
 import javax.slee.Address;
 import javax.slee.EventContext;
+import javax.slee.EventTypeID;
 import javax.slee.Sbb;
+import javax.slee.ServiceID;
 import javax.slee.SbbLocalObject;
-import javax.slee.annotation.event.EventHandler;
 import javax.slee.facilities.ActivityContextNamingFacility;
 import javax.slee.facilities.AlarmFacility;
 import javax.slee.facilities.AlarmLevel;
@@ -44,15 +52,20 @@ import javax.slee.resource.FireableEventType;
 import javax.slee.resource.InvalidConfigurationException;
 import javax.slee.resource.ReceivableService;
 import javax.slee.resource.ResourceAdaptor;
+import javax.slee.serviceactivity.ServiceActivity;
 import javax.slee.serviceactivity.ServiceActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityFactory;
+import javax.slee.serviceactivity.ServiceStartedEvent;
 import lombok.extern.slf4j.Slf4j;
+import mobi.mofokom.javax.slee.annotation.Service;
+import mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler;
 import mofokom.slee.testfw.NameVendorVersion;
 import mofokom.slee.testfw.NewInitialContextFactory;
+import mofokom.slee.testfw.SleeLifecycle;
 import static mofokom.slee.testfw.mocks.MockResourceAdaptor.getAny;
 import mofokom.slee.testfw.resource.AnyEventHandler;
 import mofokom.slee.testfw.service.ServiceLifecycle;
-import org.apache.log4j.ConsoleAppender;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import org.mockito.Mockito;
@@ -69,6 +82,8 @@ import org.mockito.stubbing.Answer;
 public class MockSlee {
 
     private static MockSlee instance;
+
+    public ExecutorService sleeExecutor;
 
     private static Level commonsLevel(String level) {
         String newLevel = level;
@@ -87,6 +102,15 @@ public class MockSlee {
         return Level.parse(newLevel);
     }
 
+    public static MockSlee getNewInstance() {
+        try {
+            instance = new MockSlee();
+        } catch (NamingException ex) {
+            log.error(ex.getMessage(), ex);
+        }
+        return instance;
+    }
+
     private Set<MockSbb> sbbs = new HashSet<>();
     public Map<String, NameVendorVersion> sbbAlias = new HashMap<>();
     private Set<MockResourceAdaptor> ras = new HashSet<>();
@@ -96,7 +120,7 @@ public class MockSlee {
     public Map<ActivityHandle, ActivityContextInterface> activities = new HashMap<>();
     public Map<NameVendorVersion, MockSleeComponent> components = new HashMap<>();
 
-    private static final Logger slog = Logger.getAnonymousLogger();
+    private static Logger slog;
     private AlarmFacility alarmFacility;
     private TimerFacility timerFacility;
     private ServiceActivityFactory serviceActivityFactory;
@@ -108,12 +132,23 @@ public class MockSlee {
     private NullActivityContextInterfaceFactory nullAciFactory;
 
     private InitialContext ic;
-    private ServiceLifecycle state;
+    private SleeLifecycle state;
 
     public Map<ActivityHandle, Object> activityMap = new HashMap();
     public Map<ActivityHandle, Set<SbbLocalObject>> sbbsA = new HashMap();
 
     static {
+
+        org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(MockSlee.class);
+        try {
+            configureLogging();
+        } catch (IOException ex) {
+            logger.error(ex.getMessage(), ex);
+
+        }
+
+        slog = Logger.getLogger(MockSlee.class.getName());
+
         if (instance == null) {
             try {
                 instance = new MockSlee();
@@ -128,11 +163,41 @@ public class MockSlee {
     }
     private HashMap<String, ? super ResourceAdaptor> links;
     private HashMap<String, Map<String, Alarm>> alarms;
+    private Map<ServiceID, Class<Sbb>> services = new HashMap<>();
+    private Map<ServiceID, ServiceLifecycle> serviceState = new HashMap<>();
 
     private MockSlee() throws NamingException {
         System.setProperty("java.naming.factory.initial", NewInitialContextFactory.class.getName());
+        this.sleeExecutor = Executors.newSingleThreadExecutor(); //SLEE Executor
         ic = new InitialContext();
         this.links = new HashMap<>();
+    }
+
+    public static void configureLogging() throws IOException {
+        configureLogging(MockResourceAdaptor.class.getClassLoader());
+    }
+
+    public static void configureLogging(ClassLoader loader) throws IOException {
+        InputStream is = loader.getResourceAsStream("logging.properties");
+
+        if (is != null) {
+            LogManager.getLogManager().reset();
+            LogManager.getLogManager().readConfiguration(is);
+            System.err.println("Logging Initialized");
+        } else {
+            System.err.println("Logging NOT Initialized");
+        }
+
+        is = loader.getResourceAsStream("log4j.properties");
+
+        if (is != null) {
+            Properties properties = new Properties();
+            properties.load(is);
+            org.apache.logging.log4j.Logger logger = org.apache.logging.log4j.LogManager.getLogger();
+            System.err.println("Log4j Initialized");
+        } else {
+            System.err.println("Log4j NOT Initialized");
+        }
     }
 
     public void setupJNDI() throws NamingException {
@@ -193,6 +258,15 @@ public class MockSlee {
     }
 
     //TODO: sbb handler methods
+    public static void doCallRealMethods(MockSleeComponent target) throws Exception {
+
+        if (target instanceof MockSbb) {
+            doCallRealMethods(((MockSbb) target).getSbb(), ((MockSbb) target).getSbbClass());
+        } else {
+            throw new UnsupportedOperationException(target.getClass().toString());
+        }
+    }
+
     public static void doCallRealMethods(Object target, Class... clazzz) throws Exception {
         doCallRealMethods(target, new Pattern[]{}, clazzz);
     }
@@ -210,7 +284,11 @@ public class MockSlee {
                     slog.log(Level.WARNING, m.getDeclaringClass() + " " + m.toString() + " not assignable from class " + clazz.getName());
 
                     continue;
-                } else if (m.getName().contains("access$") || (!clazz.isInterface() && Modifier.isAbstract(m.getModifiers())) || Modifier.isPrivate(m.getModifiers()) || Modifier.isFinal(m.getModifiers()) || m.getModifiers() == 0) {
+                } else if (!clazz.isInterface() && Modifier.isAbstract(m.getModifiers())) {
+                    //log.warn("*****************" + m.toString());
+                    continue;
+
+                } else if (m.getName().contains("access$") || Modifier.isPrivate(m.getModifiers()) || Modifier.isFinal(m.getModifiers()) || m.getModifiers() == 0) {
                     continue;
                 }
                 if (Modifier.isProtected(m.getModifiers())) {
@@ -219,7 +297,7 @@ public class MockSlee {
                 try {
                     doCallRealMethod(target, m);
                 } catch (org.mockito.exceptions.misusing.UnfinishedStubbingException x) {
-                    log.warn(target.getClass() + "->" + m.getDeclaringClass().getName() + ":" + m.getName());
+                    log.warn(target.getClass() + "matcher failed " + m.getDeclaringClass().getName() + ":" + m.getName());
                 }
             }
         });
@@ -230,11 +308,15 @@ public class MockSlee {
 
         Object o = null;
 
-        if (o == null) {
-            o = Mockito.doCallRealMethod().when(target);
-        }
+        try {
+            if (o == null) {
+                o = Mockito.doCallRealMethod().when(target);
+            }
 
-        doDangling(o, target, m);
+            doDangling(o, target, m);
+        } catch (org.mockito.exceptions.misusing.InvalidUseOfMatchersException xI) {
+            log.warn(target + " " + m.toString() + " " + xI.getMessage());
+        }
     }
 
     public static void doDangling(Object o, Object target, Method m) {
@@ -245,7 +327,8 @@ public class MockSlee {
         for (Class c : m.getParameterTypes()) {
             args[p++] = getAny(c);
         }
-        slog.fine("calling real " + m.toString());
+
+        slog.fine("completed dangling " + m.toString());
         try {
             m.invoke(o, args);
             o = null;
@@ -307,8 +390,7 @@ public class MockSlee {
             slog.info("bound activties " + this.sbbsA.toString());
             Set<ActivityContextInterface> set = this.sbbsA.entrySet().stream().filter(
                     e -> e.getValue().contains(sbbHome.getSbbLocalObject())
-            ).map(
-                    e -> this.activities.get(e.getKey())
+            ).map(e -> this.activities.get(e.getKey())
             ).collect(Collectors.toSet());
 
             slog.info(sbbHome.getSbbLocalObject() + " bound to " + set.toString());
@@ -316,13 +398,11 @@ public class MockSlee {
         }).when(sbbHome.sbbContext).getActivities();
 
         Class clazz = sbbHome.getSbbClass();
-        Arrays.asList(clazz.getMethods()).stream()
-                .filter(m
-                        -> m.isAnnotationPresent(javax.slee.annotation.event.EventHandler.class))
-                .forEach(m -> {
-                    EventHandler a = m.getAnnotation(javax.slee.annotation.event.EventHandler.class);
-            sbbHome.eventHandlers.put(NameVendorVersion.from(a.eventType()), m);
-                });
+
+        if (clazz.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.Service.class)) {
+            Service a = ((Service) clazz.getAnnotation(mobi.mofokom.javax.slee.annotation.Service.class));
+            services.put(toServiceID(a), clazz);
+        }
 
         return sbbHome.getSbb();
     }
@@ -337,11 +417,11 @@ public class MockSlee {
 
         for (Annotation a : ann) {
 
-            if (a.annotationType().equals(javax.slee.annotation.ResourceAdaptor.class)) {
-                javax.slee.annotation.ResourceAdaptor raA = (javax.slee.annotation.ResourceAdaptor) a;
+            if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.ResourceAdaptor.class)) {
+                mobi.mofokom.javax.slee.annotation.ResourceAdaptor raA = (mobi.mofokom.javax.slee.annotation.ResourceAdaptor) a;
                 NameVendorVersion nvv = NameVendorVersion.builder().name(raA.name()).vendor(raA.vendor()).version(raA.version()).build();
-                return ann.stream().filter(aa -> aa.annotationType().equals(javax.slee.annotation.ResourceAdaptorType.class)).map(aa -> {
-                    javax.slee.annotation.ResourceAdaptorType raTA = (javax.slee.annotation.ResourceAdaptorType) aa;
+                return ann.stream().filter(aa -> aa.annotationType().equals(mobi.mofokom.javax.slee.annotation.ResourceAdaptorType.class)).map(aa -> {
+                    mobi.mofokom.javax.slee.annotation.ResourceAdaptorType raTA = (mobi.mofokom.javax.slee.annotation.ResourceAdaptorType) aa;
                     MockResourceAdaptor mRa = null;
                     try {
 
@@ -353,63 +433,28 @@ public class MockSlee {
                     }
                     return null;
                 }).findFirst().get();
-            } else if (a.annotationType().equals(javax.slee.annotation.event.EventType.class)) {
+            } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.event.EventType.class)) {
 
-                javax.slee.annotation.event.EventType eA = (javax.slee.annotation.event.EventType) a;
+                mobi.mofokom.javax.slee.annotation.event.EventType eA = (mobi.mofokom.javax.slee.annotation.event.EventType) a;
                 NameVendorVersion nvv = NameVendorVersion.builder().name(eA.name()).vendor(eA.vendor()).version(eA.version()).build();
                 MockEvent mE = new MockEvent(nvv, clazz);
                 this.events.add(mE);
                 return mE;
-            } else if (a.annotationType().equals(javax.slee.annotation.Sbb.class)) {
-                javax.slee.annotation.Sbb sbbA = (javax.slee.annotation.Sbb) a;
+            } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.Sbb.class)) {
+                mobi.mofokom.javax.slee.annotation.Sbb sbbA = (mobi.mofokom.javax.slee.annotation.Sbb) a;
                 NameVendorVersion nvv = NameVendorVersion.builder().name(sbbA.name()).vendor(sbbA.vendor()).version(sbbA.version()).build();
                 try {
                     final MockSbb mSbb = new MockSbb(nvv, clazz, sbbA.localInterface(), sbbA.usageParametersInterface());
                     MockSlee.getInstance().sbbAlias.put(sbbA.alias() == null ? nvv.toString() : sbbA.alias(), nvv);
-                    Arrays.stream(clazz.getFields()).forEach(f -> {
-                        javax.slee.annotation.CMPField cmp = f.getAnnotation(javax.slee.annotation.CMPField.class);
-                        if (cmp != null) {
-                            mSbb.addCmp(f);
-                        }
-                    });
-
-                    Arrays.stream(clazz.getMethods()).forEach(m -> {
-                        javax.slee.annotation.CMPField cmp = m.getAnnotation(javax.slee.annotation.CMPField.class);
-                        if (cmp != null) {
-                            mSbb.addCmp(m);
-                        }
-                    });
-
-                    Arrays.stream(clazz.getFields()).forEach(f -> {
-                        javax.slee.annotation.ChildRelation cr = f.getAnnotation(javax.slee.annotation.ChildRelation.class);
-                        if (cr != null) {
-                            try {
-                                mSbb.addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), f);
-                            } catch (Exception ex) {
-                                Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
-                            }
-                        }
-                    });
-
-                    Arrays.stream(clazz.getMethods()).forEach(m -> {
-                        javax.slee.annotation.ChildRelation cr = m.getAnnotation(javax.slee.annotation.ChildRelation.class);
-                        if (cr != null) {
-                            try {
-                                mSbb.addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), m);
-                            } catch (Exception ex) {
-                                Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
-                            }
-                        }
-                    });
 
                     this.add(mSbb);
                     return mSbb;
                 } catch (Exception ex) {
                     Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
                 }
-            } else if (a.annotationType().equals(javax.slee.annotation.ProfileSpec.class)) {
+            } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.ProfileSpec.class)) {
 
-                javax.slee.annotation.ProfileSpec pA = (javax.slee.annotation.ProfileSpec) a;
+                mobi.mofokom.javax.slee.annotation.ProfileSpec pA = (mobi.mofokom.javax.slee.annotation.ProfileSpec) a;
                 NameVendorVersion nvv = NameVendorVersion.builder().name(pA.name()).vendor(pA.vendor()).version(pA.version()).build();
                 MockProfile mP = new MockProfile(nvv, pA.abstractClass(), pA.cmpInterface(), pA.localInterface(), pA.tableInterface(), pA.managementInterface());
                 this.profiles.add(mP);
@@ -421,7 +466,7 @@ public class MockSlee {
                 }, mP.getCmpIface(), pA.cmpInterface());
 
                 return mP;
-            } else if (a.annotationType().equals(javax.slee.annotation.UsageParameter.class)) {
+            } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.UsageParameter.class)) {
             }
         }
         return null;
@@ -429,8 +474,9 @@ public class MockSlee {
 
     public void start() throws NamingException {
         log.info("starting slee");
-        this.state = ServiceLifecycle.STARTING;
+        this.state = SleeLifecycle.STARTING;
         this.setupJNDI();
+        setupFactories();
         for (MockResourceAdaptor ra : ras) {
             try {
                 log.info("starting " + ra.nvv.toString());
@@ -441,19 +487,60 @@ public class MockSlee {
                 Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
             }
         }
-        this.state = ServiceLifecycle.ACTIVE;
+
+        this.state = SleeLifecycle.STARTED;
         log.info("started slee");
+        EventTypeID eventType = new EventTypeID(
+                ServiceStartedEventHandler.SERVICE_STARTED_EVENT_1_1_NAME,
+                ServiceStartedEventHandler.SERVICE_STARTED_EVENT_1_1_VENDOR,
+                ServiceStartedEventHandler.SERVICE_STARTED_EVENT_1_1_VERSION
+        );
+
+        log.info("root sbbs: " + services.values().stream().map(r -> r.toString()).collect(Collectors.toList()).toString());
+        for (MockSbb sbb : sbbs) {
+            //TODO store component state
+            log.info(sbb.getSbb().getClass() + " " + services.values().stream().map(r -> r.toString()).collect(Collectors.toList()).toString());
+            services.entrySet().stream().filter(r -> r.getValue().isAssignableFrom(sbb.getSbb().getClass())).forEach(r2 -> {
+                log.info("starting " + sbb.nvv.toString());
+
+                ServiceStartedEvent event = mock(ServiceStartedEvent.class);
+                ServiceID serviceId = null; //reverseKey lookup
+                Mockito.doReturn(serviceId).when(event).getService();
+                ServiceActivity activity = mock(ServiceActivity.class);
+                doReturn(r2.getKey()).when(activity).getService();
+                ActivityContextInterface aci = mock(ActivityContextInterface.class);
+                doReturn(activity).when(aci).getActivity();
+                EventContext ec = new MockEventContext(event, aci, null, serviceId);
+                FireableEventType fet = new MockFireableEventType(eventType, event);
+                try {
+                    deliverEvent(sbb, fet, aci, ec);
+                    serviceState.put(serviceId, ServiceLifecycle.ACTIVE);
+                } catch (IllegalAccessException | InvocationTargetException ex) {
+                    serviceState.put(serviceId, ServiceLifecycle.STOPPED);
+                    log.error(ex.getMessage(), ex);
+                }
+
+                log.info("started " + sbb.nvv.toString());
+            });
+        }
     }
 
     public boolean isStarted() {
-        return this.state == ServiceLifecycle.ACTIVE;
+        return this.state == SleeLifecycle.STARTED;
     }
 
     public void stop() {
-        this.state = ServiceLifecycle.INACTIVE;
+        this.state = SleeLifecycle.STOPPING;
+
         for (MockResourceAdaptor ra : ras) {
             ra.stop();
         }
+
+        for (MockSbb sbb : sbbs) {
+            sbb.getSbb().unsetSbbContext();
+        }
+        log.info("------------------- STOPPED ------------------------");
+        this.state = SleeLifecycle.STOPPED;
     }
 
     public ActivityContextInterface createNullActivityContextInterface() {
@@ -547,7 +634,7 @@ public class MockSlee {
         return ic;
     }
 
-    public ServiceLifecycle getState() {
+    public SleeLifecycle getState() {
         return state;
     }
 
@@ -612,6 +699,7 @@ public class MockSlee {
         }
     }
 
+    /**
     public static void setLogger(String name, String level) {
         Logger logger = LogManager.getLogManager().getLogger(name);
         if (logger != null) {
@@ -634,28 +722,38 @@ public class MockSlee {
 
         }
     }
-
+     **/
     public void deliverEvent(FireableEventType eventType, ActivityContextInterface aci, EventContext ec) throws MultiException, UnhandledEventException {
         final List<Throwable> e = new ArrayList<>();
         final List<Boolean> h = new ArrayList<>();
 
         this.getSbbs().forEach(sbb -> {
+            //TODO: check root sbb for receivable service if specified
             try {
                 boolean handled = deliverEvent(sbb, eventType, aci, ec);
                 h.add(handled);
 
+                //TODO slee transaction 
                 //TODO sort by priority
                 sbb.childRelation.values().stream().forEach(cr -> {
-                    ((MockChildRelation) cr).mock.forEach(childSbb -> {
-                        try {
-                            boolean handled2 = deliverEvent(((MockChildRelation) childSbb).sbb, eventType, aci, ec);
-                            h.add(handled2);
-                        } catch (IllegalAccessException ex) {
-                            e.add(ex.getCause());
-                        } catch (InvocationTargetException ex) {
-                            e.add(ex.getCause());
-                        }
+                    final CompletableFuture cf = CompletableFuture.runAsync(() -> {
+                        ((MockChildRelation) cr).mock.forEach(childSbb -> {
+
+                            Future<?> future = this.sleeExecutor.submit(() -> {
+                                try {
+                                    boolean handled2 = deliverEvent(((MockChildRelation) childSbb).sbb, eventType, aci, ec);
+                                    h.add(handled2);
+                                } catch (IllegalAccessException ex) {
+                                    e.add(ex.getCause());
+                                } catch (InvocationTargetException ex) {
+                                    e.add(ex.getCause());
+                                }
+                            });
+
+                        });
                     });
+                    cf.join();
+                    //wait for all futures;
                 });
             } catch (IllegalAccessException ex) {
                 e.add(ex.getCause());
@@ -687,11 +785,12 @@ public class MockSlee {
 
         NameVendorVersion tNvv = NameVendorVersion.from(eventType.getEventType());
 
+        log.info(tNvv.toString());
         Optional<Method> hm = Arrays.asList(clazz.getMethods()).stream()
-                .filter(m -> m.isAnnotationPresent(javax.slee.annotation.event.EventHandler.class))
+                .filter(m -> m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.EventHandler.class))
                 .filter(m -> {
-                    Annotation a = m.getAnnotation(javax.slee.annotation.event.EventHandler.class);
-                    javax.slee.annotation.event.EventHandler eA = (javax.slee.annotation.event.EventHandler) a;
+                    Annotation a = m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.EventHandler.class);
+                    mobi.mofokom.javax.slee.annotation.event.EventHandler eA = (mobi.mofokom.javax.slee.annotation.event.EventHandler) a;
 
                     NameVendorVersion nvv = NameVendorVersion.builder().name(eA.eventType().name()).vendor(eA.eventType().vendor()).version(eA.eventType().version()).build();
 
@@ -699,12 +798,28 @@ public class MockSlee {
                 })
                 .findFirst();
 
+        if (hm.isEmpty()) {
+            hm = Arrays.asList(clazz.getMethods()).stream()
+                    .filter(m -> m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class))
+                    .filter(m -> {
+                        Annotation a = m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class);
+                        ServiceStartedEventHandler eA = (ServiceStartedEventHandler) a;
+
+                        NameVendorVersion nvv = NameVendorVersion.builder().name(eA.eventType().name()).vendor(eA.eventType().vendor()).version(eA.eventType().version()).build();
+
+                        return nvv.equals(tNvv);
+                    })
+                    .findFirst();
+        }
+
+        //TODO: add standard profiles
         if (hm.isPresent()) {
-            log.debug("handled " + tNvv + " on " + clazz);
+            log.info("handled " + tNvv + " on " + clazz);
+            //TODO: create //load //passivate
             this.callSbb(sbb, hm.get(), eventType, aci, ec);
             return true;
         } else {
-            log.debug("no handler for " + tNvv + " on " + clazz);
+            log.info("no handler for " + tNvv + " on " + clazz);
             return false;
         }
     }
@@ -712,9 +827,12 @@ public class MockSlee {
     public void callSbb(Sbb sbb, Method m, FireableEventType eventType, ActivityContextInterface aci, EventContext ec) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException {
 
         Object event = ec.getEvent();
+        assertNotNull(event, "event can't be null");
+        assertNotNull(aci, "aci can't be null");
         Class[] p = m.getParameterTypes();
+        log.info("calling " + m.toString());
         if (p[0].isAssignableFrom(event.getClass()) && p[1].equals(ActivityContextInterface.class)) {
-            slog.info("invoking " + m.toGenericString());
+            log.info("invoking " + m.toGenericString());
             if (p.length == 2) {
                 m.invoke(sbb, new Object[]{event, aci});
             } else if (p.length == 3) {
@@ -774,4 +892,12 @@ public class MockSlee {
         return this.components.entrySet().stream().filter(k -> k.getValue().equals(sbb)).map(k -> k.getKey()).findFirst();
     }
 
+    private void setupFactories() {
+        doReturn(mock(NullActivity.class)).when(this.nullActivityFactory).createNullActivity();
+        doReturn(mock(ActivityContextInterface.class)).when(this.nullAciFactory).getActivityContextInterface(any(NullActivity.class));
+    }
+
+    private ServiceID toServiceID(Service a) {
+        return new ServiceID(a.name(), a.vendor(), a.version());
+    }
 }

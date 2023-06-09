@@ -30,7 +30,7 @@ public class NewInitialContextFactory implements InitialContextFactory {
             }
             logger.fine("lookup " + name);
             if (!map.containsKey(name)) {
-                throw new NamingException(name + " not found");
+                throw new NamingException("the name '"+name + "' was not found");
             }
             return map.get(name);
         }

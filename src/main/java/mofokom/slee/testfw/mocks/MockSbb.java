@@ -1,5 +1,7 @@
+//TODO validate eventFiring method signatures
 package mofokom.slee.testfw.mocks;
 
+import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
@@ -9,9 +11,13 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import static java.util.logging.Level.*;
 import java.util.logging.Logger;
+import static java.util.stream.Collectors.toList;
+import java.util.stream.Stream;
 import javax.annotation.PostConstruct;
 import javax.naming.Context;
 import javax.naming.InitialContext;
@@ -22,9 +28,11 @@ import javax.slee.nullactivity.NullActivityContextInterfaceFactory;
 import javax.slee.nullactivity.NullActivityFactory;
 import javax.slee.profile.ProfileFacility;
 import javax.slee.profile.ProfileTableActivityContextInterfaceFactory;
+import javax.slee.resource.ReceivableService;
 import javax.slee.serviceactivity.ServiceActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityFactory;
 import javax.slee.serviceactivity.ServiceStartedEvent;
+import mobi.mofokom.javax.slee.annotation.event.EventTypeRef;
 import mofokom.slee.testfw.NameVendorVersion;
 import static org.mockito.Mockito.*;
 import org.mockito.invocation.InvocationOnMock;
@@ -44,7 +52,6 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private final Class<? extends Sbb> sbbClass;
     private final Class usage;
     private SBBLOCAL sbbLocalObject; //TODO: support cascading deletes
-    private static final Logger slog = Logger.getAnonymousLogger();
     private InitialContext ic;
     private Context env;
     private AlarmFacility alarmFacility;
@@ -65,6 +72,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private Map<String, NameVendorVersion> childRelationMethods = new HashMap<>();
 
     public Map<NameVendorVersion, Method> eventHandlers = new HashMap();
+    public Map<NameVendorVersion, Method> eventFires = new HashMap();
 
     public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass) throws InstantiationException, IllegalAccessException {
         this(nvv, sbbClass, MockSbbLocal.class, MockUsageParameters.class);
@@ -114,7 +122,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
             log.info(invocation.getMethod().getName() + " " + Arrays.asList(invocation.getArguments()).toString());
             for (Object o : invocation.getArguments()) {
                 if (o instanceof Throwable) {
-                    ((Throwable) o).printStackTrace();
+                    log.log(java.util.logging.Level.WARNING, ((Throwable) o).getMessage(), (Throwable) o);
                 }
             }
             return null;
@@ -124,20 +132,22 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private void setupStubs() {
 
         doReturn(Boolean.TRUE).when(tracer).isInfoEnabled();
+        doReturn(Boolean.TRUE).when(tracer).isFinestEnabled();
+        doReturn(Boolean.TRUE).when(tracer).isFinerEnabled();
         doReturn(Boolean.TRUE).when(tracer).isFineEnabled();
         doReturn(Boolean.TRUE).when(tracer).isSevereEnabled();
 
-        doAnswer(loggingAnswer).when(tracer).finest(anyString());
-        doAnswer(loggingAnswer).when(tracer).finest(anyString(), any(Throwable.class));
-        doAnswer(loggingAnswer).when(tracer).fine(anyString());
-        doAnswer(loggingAnswer).when(tracer).fine(anyString(), any(Throwable.class));
-        doAnswer(loggingAnswer).when(tracer).info(anyString());
-        doAnswer(loggingAnswer).when(tracer).info(anyString(), any(Throwable.class));
-        doAnswer(loggingAnswer).when(tracer).warning(anyString());
-        doAnswer(loggingAnswer).when(tracer).warning(anyString(), (Throwable) anyObject());
-        doAnswer(loggingAnswer).when(tracer).severe(anyString(), (Throwable) anyObject());
-        doAnswer(loggingAnswer).when(tracer).severe(anyString());
-        doReturn(tracer).when(sbbContext).getTracer(anyString());
+        doAnswer(loggingAnswer).when(tracer).finest(any());
+        doAnswer(loggingAnswer).when(tracer).finest(any(), any(Throwable.class));
+        doAnswer(loggingAnswer).when(tracer).fine(any());
+        doAnswer(loggingAnswer).when(tracer).fine(any(), any(Throwable.class));
+        doAnswer(loggingAnswer).when(tracer).info(any());
+        doAnswer(loggingAnswer).when(tracer).info(any(), any(Throwable.class));
+        doAnswer(loggingAnswer).when(tracer).warning(any());
+        doAnswer(loggingAnswer).when(tracer).warning(any(), any(Throwable.class));
+        doAnswer(loggingAnswer).when(tracer).severe(any(), any(Throwable.class));
+        doAnswer(loggingAnswer).when(tracer).severe(any());
+        doReturn(tracer).when(sbbContext).getTracer(any());
         doReturn(new SbbID(sbbClass.getName(), "mockVendor", "mockVersion")).when(sbbContext).getSbb();
         doReturn(getSbbLocalObject()).when(sbbContext).getSbbLocalObject();
 
@@ -149,33 +159,139 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     public void doCallRealMethodEventHandlers() {
         this.eventHandlers.entrySet().forEach(e -> {
-            log.fine("calling " + e.getValue().getName() + " for " + e.getKey().toString());
+            log.info("calling " + e.getValue().getName() + " for " + e.getKey().toString());
             MockSlee.doCallRealMethod(sbb, e.getValue());
         });
     }
 
     public void init() throws Exception {
+        log.info("init sbb" + sbb.getClass().getName());
 
         doCallRealMethods(sbb, javax.slee.Sbb.class);
+
+        Arrays.stream(this.sbbClass.getDeclaredFields()).forEach(f -> {
+            mobi.mofokom.javax.slee.annotation.CMPField cmp = f.getAnnotation(mobi.mofokom.javax.slee.annotation.CMPField.class);
+            if (cmp != null) {
+                log.info("detected CMP " + f);
+                addCmp(f);
+            }
+        });
+        /**
+
+        Arrays.stream(this.sbbClass.getMethods()).forEach(m -> {
+            mobi.mofokom.javax.slee.annotation.CMPField cmp = m.getAnnotation(mobi.mofokom.javax.slee.annotation.CMPField.class);
+            if (cmp != null) {
+                addCmp(m);
+            }
+        });
+         **/
+
+        Arrays.stream(this.sbbClass.getFields()).forEach(f -> {
+            mobi.mofokom.javax.slee.annotation.ChildRelation cr = f.getAnnotation(mobi.mofokom.javax.slee.annotation.ChildRelation.class);
+            if (cr != null) {
+                try {
+                    addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), f);
+                } catch (Exception ex) {
+                    log.log(SEVERE, ex.getMessage(), ex);
+                }
+            }
+        });
+
+        Arrays.stream(this.sbbClass.getMethods()).forEach(m -> {
+            mobi.mofokom.javax.slee.annotation.ChildRelation cr = m.getAnnotation(mobi.mofokom.javax.slee.annotation.ChildRelation.class);
+            if (cr != null) {
+                try {
+                    this.addChildRelation(cr.sbbAliasRef(), cr.defaultPriority(), m);
+                } catch (Exception ex) {
+                    log.log(SEVERE, ex.getMessage(), ex);
+                }
+            }
+        });
 
         Arrays.stream(this.sbbClass.getMethods())
                 .filter(m
                         -> m.getReturnType().isAssignableFrom(ChildRelation.class) && m.getName().startsWith("get"))
                 .forEach(m -> {
 
-            Object o = doAnswer(ic -> {
-                NameVendorVersion childNvv = MockSbb.this.childRelationMethods.get(ic.getMethod().getName());
-                log.info("returning child relation for " + childNvv + " child of " + this.nvv);
-                MockChildRelation mcr = MockSbb.this.childRelation.get(childNvv);
-                if (mcr == null) {
-                    throw new Exception("can't find child relation for " + childNvv + " child of " + this.nvv + " did you add it before?");
-                }
+                    Object o = doAnswer(ic -> {
+                        NameVendorVersion childNvv = MockSbb.this.childRelationMethods.get(ic.getMethod().getName());
+                        log.info("returning child relation for " + childNvv + " child of " + this.nvv);
+                        MockChildRelation mcr = MockSbb.this.childRelation.get(childNvv);
+                        if (mcr == null) {
+                            throw new Exception("can't find child relation for " + childNvv + " child of " + this.nvv + " did you add it before?");
+                        }
 
                         return mcr.mock;
                     }).when(sbb);
                     MockSlee.doDangling(o, sbb, m);
                 });
 
+        Arrays.asList(this.sbbClass.getMethods()).stream()
+                .filter(m
+                        -> m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.EventHandler.class))
+                .forEach(m -> {
+                    mobi.mofokom.javax.slee.annotation.event.EventHandler a = m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.EventHandler.class);
+                    eventHandlers.put(NameVendorVersion.from(a.eventType()), m);
+                });
+
+        Arrays.asList(this.sbbClass.getMethods()).stream()
+                .filter(m
+                        -> m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ActivityEndEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ProfileAddedEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ProfileRemovedEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ProfileUpdatedEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class)
+                || m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.TimerEventHandler.class)
+                )
+                .forEach(m -> {
+                    Stream.of(
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ActivityEndEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ProfileAddedEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ProfileRemovedEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ProfileUpdatedEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler.class),
+                            m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.TimerEventHandler.class)
+                    ).filter(Objects::nonNull).forEach(a -> {
+                        try {
+                            eventHandlers.put(NameVendorVersion.from((EventTypeRef) a.getClass().getMethod("eventType").invoke(a)), m);
+                        } catch (NoSuchMethodException ex) {
+                            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                        } catch (SecurityException ex) {
+                            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                        } catch (IllegalAccessException ex) {
+                            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                        } catch (IllegalArgumentException ex) {
+                            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                        } catch (InvocationTargetException ex) {
+                            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                        }
+                    });
+
+                });
+
+        log.info("handles events " + eventHandlers.keySet().toString());
+        Arrays.asList(this.sbbClass.getMethods()).stream()
+                .filter(m
+                        -> m.isAnnotationPresent(mobi.mofokom.javax.slee.annotation.event.EventFiring.class))
+                .forEach(m -> {
+                    mobi.mofokom.javax.slee.annotation.event.EventFiring a = m.getAnnotation(mobi.mofokom.javax.slee.annotation.event.EventFiring.class);
+                    Object o = doAnswer(ic -> {
+                        log.info("firing event " + ic.toString());
+                        ActivityContextInterface aci = ic.getArgumentAt(1, ActivityContextInterface.class);
+                        EventTypeID eventTypeId = new EventTypeID(a.value().name(), a.value().vendor(), a.value().version());
+                        Object event = ic.getArgumentAt(0, Object.class);
+                        EventContext eventContext = MockSlee.createEventContext(aci, event, ic.getArgumentAt(2, Address.class), mock(ReceivableService.class));
+                        MockSlee.getInstance().deliverEvent(new MockFireableEventType(eventTypeId, event), aci, eventContext);
+                        return null;
+                    }).when(sbb);
+
+                    MockSlee.doDangling(o, sbb, m);
+                    eventFires.put(NameVendorVersion.from(a.value()), m);
+                });
+
+        log.info("fire events " + eventFires.keySet().toString());
         Arrays.stream(this.sbbClass.getMethods())
                 .filter(m -> m.isAnnotationPresent(PostConstruct.class))
                 .forEach(m -> {
@@ -191,7 +307,8 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                     }
                 });
 
-        slog.info("Sbb Mock starting");
+        log.info("has cmp fields " + this.cmpMap.keySet().toString());
+        log.info("Sbb Mock starting");
         this.setupStubs();
         try {
             sbb.setSbbContext(sbbContext);
@@ -233,12 +350,13 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                      * (method.getDeclaringClass().equals(MockSbbLocal.class)) {
                      * return sbb; }
                      */
-                    if (!method.getDeclaringClass().isAssignableFrom(target.getClass())) {
+                    if (method.getDeclaringClass().isAssignableFrom(target.getClass())) {
                         Optional<Method> m = MockSbb.this.findSameMethodOn(method, target);
                         if (!m.isPresent()) {
-                            throw new Exception("method not found " + m.toString());
+                            throw new Exception("local method not found on Sbb" + m.toString());
                         }
                         method = m.get();
+                        log.info(method.toString());
                     }
 
                     return method.invoke(target, args); //TODO dynamically replace target negation implements local interface.
@@ -277,13 +395,16 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     }
 
     public void addCmp(Field f) {
+        if (!f.getType().isPrimitive() || Serializable.class.isAssignableFrom(f.getType())) {
+            log.warning(f.toString() + " is not serializable");
+        }
+
         Class<?> clazz = f.getDeclaringClass();
         StringBuilder name = new StringBuilder(f.getName());
         name.setCharAt(0, Character.toUpperCase(name.charAt(0)));
         try {
             addCmp(clazz.getMethod("set" + name.toString(), f.getType()));
             addCmp(clazz.getMethod("get" + name.toString()));
-
         } catch (NoSuchMethodException ex) {
             Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
         } catch (SecurityException ex) {
@@ -293,20 +414,28 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     public void addCmp(Method m) {
         final String fieldName = m.getName().substring(3).toLowerCase();
-        log.info("adding cmp " + fieldName);
-        Object o = doAnswer(ic -> {
-            if (m.getName().startsWith("get")) {
-                log.info("getting cmp " + fieldName);
-                Object v = MockSbb.this.cmpMap.get(fieldName);
-                log.info("got cmp " + fieldName + " " + v);
-                return v;
-            } else if (m.getName().startsWith("set")) {
+        log.info("adding cmp " + fieldName + " " + m.toString());
 
-                log.info("setting cmp " + fieldName);
+        this.cmpMap.put(fieldName, null);
+        Object o = doAnswer(ic -> {
+            String fieldName2 = m.getName().substring(3).toLowerCase();
+            //log.info("!!!!!!!!!!!!!!access cmp " + fieldName2 + " " + ic.getMethod().toString() + " " + Arrays.asList(Thread.currentThread().getStackTrace()).stream().filter(st->st.getClassName().contains("test")).collect(toList()).toString());
+            Method m2 = ic.getMethod();
+            if (m2.getName().startsWith("get")) {
+                log.fine("getting cmp " + fieldName2);
+                Object v = MockSbb.this.cmpMap.get(fieldName2);
+                log.fine("got cmp " + fieldName2 + " " + v);
+                //log.log(INFO, "" , new Exception());
+                return v;
+            } else if (m2.getName().startsWith("set")) {
                 MockSbb.this.cmpMap.put(fieldName, ic.getArguments()[0]);
+                log.fine("setting cmp " + fieldName2 + " " + ic.getArguments()[0]);
+                return Void.TYPE;
+            } else {
+                throw new IllegalAccessError(m.toString());
             }
-            return Void.TYPE;
         }).when(sbb);
+
         MockSlee.doDangling(o, sbb, m);
     }
 

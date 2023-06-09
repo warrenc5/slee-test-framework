@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>biz.mofokom</groupId>
     <artifactId>slee-test-framework</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.1-SNAPSHOT</version>
     <name>slee-test-framework</name>
     <url>http://maven.apache.org</url>
     <dependencies>
@@ -57,16 +57,34 @@
             </exclusions>
         </dependency>
         <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <version>4.12</version>
-            <scope>provided</scope>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.7</version>
         </dependency>
-
         <dependency>
-            <groupId>log4j</groupId>
-            <artifactId>log4j</artifactId>
-            <version>1.2.17</version>
+            <groupId>org.slf4j</groupId>
+            <artifactId>jul-to-slf4j</artifactId>
+            <version>1.7.30</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.3.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.17.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.17.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.17.2</version>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -83,13 +101,7 @@
         <dependency>
             <groupId>org.aspectj</groupId>
             <artifactId>aspectjrt</artifactId>
-            <version>1.9.5</version>
-        </dependency>
-        <dependency>
-            <artifactId>junit</artifactId>
-            <groupId>junit</groupId>
-            <version>4.11</version>
-            <scope>test</scope>
+            <version>${version.aspectj}</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -104,26 +116,20 @@
             <type>jar</type>
         </dependency>
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>1.7.30</version>
-        </dependency>
-        <dependency>
-            <groupId>mobi.mofokom.slee</groupId>
-            <artifactId>jain-slee-annotations</artifactId>
-            <version>1.0-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>org.mobicents.servers.jainslee.api</groupId>
-            <artifactId>jain-slee-11-ext</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <groupId>mobi.mofokom.javax.slee</groupId>
+            <artifactId>jain-slee-annotations-processor</artifactId>
+            <version>1.0.1-SNAPSHOT</version>
             <scope>test</scope>
-            <type>jar</type>
         </dependency>
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-jdk14</artifactId>
-            <version>1.7.30</version>
+            <groupId>mobi.mofokom.javax.slee</groupId>
+            <artifactId>jain-slee-annotations</artifactId>
+            <version>1.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>mobi.mofokom.javax.slee</groupId>
+            <artifactId>jain-slee-annotations-examples</artifactId>
+            <version>1.0.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -141,6 +147,12 @@
                 <version>3.0.0-M4</version>   
                 <configuration>
                     <trimStackTrace>false</trimStackTrace>
+                    <systemProperties>
+                        <slee.annotation.debug>true</slee.annotation.debug>
+                    </systemProperties>
+                    <!--
+                <debugForkedProcess>true</debugForkedProcess>
+                    -->
                 </configuration>
             </plugin>
             <plugin>
@@ -155,11 +167,100 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                        <configuration>
+                            <!--
+                <skip>true</skip>
+                            -->
+                            <proc>only</proc>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>org.projectlombok</groupId>
+                                    <artifactId>lombok</artifactId>
+                                    <version>1.18.12</version>
+                                </path>
+                            </annotationProcessorPaths>
+
+                            <!--
+                <annotationProcessors>
+                    <annotationProcessor>mobi.mofokom.javax.slee.SleeAnnotationProcessor</annotationProcessor>
+                </annotationProcessors>
+                            -->
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                            <compilerArgs>
+                                <arg>-Anobinary=false</arg>
+                                <arg>-Adebug</arg>
+                                <arg>-Anofail</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                <groupId>com.nickwongdev</groupId>
+                <version>1.12.6</version>
+                <groupId>dev.aspectj</groupId>
+                <version>1.13.M3</version>
+                -->
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>aspectj-maven-plugin</artifactId>
+                <version>1.14.0</version>
+                <executions>
+                    <execution>
+                        <id>test-compile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <forceAjcCompile>true</forceAjcCompile>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                    <complianceLevel>1.8</complianceLevel>
+                    <showWeaveInfo>false</showWeaveInfo>
+                    <verbose>false</verbose>
+                    <XnoInline>true</XnoInline>
+                    <XnotReweavable>true</XnotReweavable>
+                    <additionalCompilerArgs>-Anobinary=true, -Adebug=true, -Anofail</additionalCompilerArgs>
+                    <!--
+<proc>none</proc>
+                    -->
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.aspectj</groupId>
+                        <artifactId>aspectjtools</artifactId>
+                        <version>${version.aspectj}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
         </plugins>
     </build>
     <properties>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <version.aspectj>1.9.20-SNAPSHOT</version.aspectj> 
     </properties>
     <repositories>
         <repository>
