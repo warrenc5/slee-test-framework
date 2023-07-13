@@ -48,9 +48,10 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private final Tracer tracer;
     private Logger log;
     private final SBB sbb;
-    private final Class<? extends SbbLocalObject> local;
+    private final Class<? extends SbbLocalObject> sbbLocalObjectClass;
     private final Class<? extends Sbb> sbbClass;
     private final Class usage;
+    private final USAGE usageMock;
     private SBBLOCAL sbbLocalObject; //TODO: support cascading deletes
     private InitialContext ic;
     private Context env;
@@ -64,7 +65,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     private ActivityContextNamingFacility acNamingFacility;
     private NullActivityContextInterfaceFactory nullAciFactory;
 
-    private Map<String, Object> cmpMap = new HashMap<>();
+    private Map<String, Object> cmpMap;
     private SBB cmpProxy;
 
     public Map<NameVendorVersion, MockChildRelation> childRelation = new HashMap<>();
@@ -84,14 +85,14 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     public MockSbb(NameVendorVersion nvv, Class<? extends Sbb> sbbClass, Class<? extends SbbLocalObject> local, Class usage) throws InstantiationException, IllegalAccessException {
         super(nvv);
-        this.local = local;
+        this.sbbLocalObjectClass = local;
         this.usage = usage;
         this.sbbClass = sbbClass;
+        this.cmpMap = new HashMap<>();
         log = Logger.getLogger(this.getClass().getSimpleName());
 
         sbb = (SBB) mock(sbbClass); //TODO use proxy for abstract?
-
-
+        usageMock = (USAGE) mock(usage);
         /*
         cmpProxy = (SBB) Proxy.newProxyInstance(this.getClass().getClassLoader(), new Class[]{sbbClass}, new InvocationHandler() {
 
@@ -160,7 +161,13 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
     public void doCallRealMethodEventHandlers() {
         this.eventHandlers.entrySet().forEach(e -> {
             log.info("calling " + e.getValue().getName() + " for " + e.getKey().toString());
-            MockSlee.doCallRealMethod(sbb, e.getValue());
+            try {
+                MockSlee.doCallRealMethod(sbb, e.getValue());
+            } catch (InvocationTargetException | IllegalAccessException ex) {
+                log.severe(() -> {
+                    return ex.getMessage();
+                });
+            }
         });
     }
 
@@ -169,7 +176,7 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
         doCallRealMethods(sbb, javax.slee.Sbb.class);
 
-        Arrays.stream(this.sbbClass.getDeclaredFields()).forEach(f -> {
+        Arrays.stream(this.sbbClass.getFields()).forEach(f -> {
             mobi.mofokom.javax.slee.annotation.CMPField cmp = f.getAnnotation(mobi.mofokom.javax.slee.annotation.CMPField.class);
             if (cmp != null) {
                 log.info("detected CMP " + f);
@@ -223,7 +230,11 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
                         return mcr.mock;
                     }).when(sbb);
-                    MockSlee.doDangling(o, sbb, m);
+                    try {
+                        MockSlee.doDangling(o, sbb, m);
+                    } catch (IllegalAccessException | InvocationTargetException ex) {
+                        Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                    }
                 });
 
         Arrays.asList(this.sbbClass.getMethods()).stream()
@@ -287,8 +298,12 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                         return null;
                     }).when(sbb);
 
-                    MockSlee.doDangling(o, sbb, m);
-                    eventFires.put(NameVendorVersion.from(a.value()), m);
+                    try {
+                        MockSlee.doDangling(o, sbb, m);
+                        eventFires.put(NameVendorVersion.from(a.value()), m);
+                    } catch (IllegalAccessException | InvocationTargetException ex) {
+                        Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+                    }
                 });
 
         log.info("fire events " + eventFires.keySet().toString());
@@ -307,7 +322,21 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                     }
                 });
 
-        log.info("has cmp fields " + this.cmpMap.keySet().toString());
+        Arrays.stream(this.sbbClass.getMethods()).filter(m -> { //TODO: do named usage parameter sets
+            return m.getName().equals("getDefaultSbbUsageParameterSet");
+        }).forEach(m1 -> {
+            Object o = doAnswer(ic -> {
+                return this.usageMock;
+            }).when(sbb);
+            try {
+                MockSlee.doDangling(o, this.sbb, m1);
+            } catch (IllegalAccessException ex) {
+                Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+            } catch (InvocationTargetException ex) {
+                Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+            }
+        });
+        log.info("has cmp fields " + MockSbb.this.sbb.hashCode() + " " + MockSbb.this.cmpMap.hashCode() + " " + this.cmpMap.keySet().toString());
         log.info("Sbb Mock starting");
         this.setupStubs();
         try {
@@ -329,11 +358,15 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
         return this.sbbClass;
     }
 
+    public Class<? extends SbbLocalObject> getSbbLocalObjectClass() {
+        return this.sbbLocalObjectClass;
+    }
+
     public SBBLOCAL getSbbLocalObject() {
         if (sbbLocalObject == null) {
 
             Set<Class> classes = new HashSet<>();
-            classes.add(local);
+            classes.add(sbbLocalObjectClass);
             classes.add(MockSbbLocal.class);
             Class<?>[] interfaces = this.getClass().getInterfaces();
             classes.addAll(Arrays.asList(interfaces));
@@ -350,16 +383,19 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
                      * (method.getDeclaringClass().equals(MockSbbLocal.class)) {
                      * return sbb; }
                      */
-                    if (method.getDeclaringClass().isAssignableFrom(target.getClass())) {
+                    if (!method.getDeclaringClass().isAssignableFrom(target.getClass())) {
                         Optional<Method> m = MockSbb.this.findSameMethodOn(method, target);
                         if (!m.isPresent()) {
                             throw new Exception("local method not found on Sbb" + m.toString());
                         }
                         method = m.get();
-                        log.info(method.toString());
+                        log.info("local interface method of sbb " + method.toString());
+                    } else {
+                        log.info("concrete method of sbb " + method.toString());
                     }
 
-                    return method.invoke(target, args); //TODO dynamically replace target negation implements local interface.
+                    log.info("target " + target + " " + target.getClass());
+                    return method.invoke(target, args); //TODO dynamically replace target negation implements sbbLocalObjectClass interface.
                 }
             });
         }
@@ -399,37 +435,36 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
             log.warning(f.toString() + " is not serializable");
         }
 
-        Class<?> clazz = f.getDeclaringClass();
+        Class<?> clazz = this.sbbClass;
         StringBuilder name = new StringBuilder(f.getName());
         name.setCharAt(0, Character.toUpperCase(name.charAt(0)));
         try {
             addCmp(clazz.getMethod("set" + name.toString(), f.getType()));
             addCmp(clazz.getMethod("get" + name.toString()));
-        } catch (NoSuchMethodException ex) {
-            Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
-        } catch (SecurityException ex) {
+        } catch (NoSuchMethodException | SecurityException | IllegalAccessException | InvocationTargetException ex) {
             Logger.getLogger(MockSbb.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
         }
     }
 
-    public void addCmp(Method m) {
+    public void addCmp(Method m) throws IllegalAccessException, InvocationTargetException {
         final String fieldName = m.getName().substring(3).toLowerCase();
-        log.info("adding cmp " + fieldName + " " + m.toString());
+        log.info("adding cmp " + MockSbb.this.sbb.hashCode() + " " + MockSbb.this.cmpMap.hashCode() +" " + fieldName + " " + m.toString());
 
         this.cmpMap.put(fieldName, null);
+
         Object o = doAnswer(ic -> {
             String fieldName2 = m.getName().substring(3).toLowerCase();
             //log.info("!!!!!!!!!!!!!!access cmp " + fieldName2 + " " + ic.getMethod().toString() + " " + Arrays.asList(Thread.currentThread().getStackTrace()).stream().filter(st->st.getClassName().contains("test")).collect(toList()).toString());
             Method m2 = ic.getMethod();
             if (m2.getName().startsWith("get")) {
-                log.fine("getting cmp " + fieldName2);
+                log.info("getting cmp " + MockSbb.this.cmpMap.hashCode() + " " +fieldName2 + " " + MockSbb.this.cmpMap.toString());
                 Object v = MockSbb.this.cmpMap.get(fieldName2);
-                log.fine("got cmp " + fieldName2 + " " + v);
+                log.info("got cmp " + MockSbb.this.sbb.hashCode() + " " + MockSbb.this.cmpMap.hashCode() + " " + fieldName2 + " " + v);
                 //log.log(INFO, "" , new Exception());
                 return v;
             } else if (m2.getName().startsWith("set")) {
-                MockSbb.this.cmpMap.put(fieldName, ic.getArguments()[0]);
-                log.fine("setting cmp " + fieldName2 + " " + ic.getArguments()[0]);
+                MockSbb.this.cmpMap.put(fieldName2, ic.getArguments()[0]);
+                log.info("setting cmp " + MockSbb.this.sbb.hashCode() + " " + MockSbb.this.cmpMap.hashCode() + " " + fieldName2 + " " + ic.getArguments()[0] + " " + MockSbb.this.cmpMap.toString());
                 return Void.TYPE;
             } else {
                 throw new IllegalAccessError(m.toString());
@@ -473,6 +508,10 @@ public class MockSbb<SBB extends Sbb, SBBLOCAL extends SbbLocalObject, USAGE> ex
 
     private Optional<Method> findSameMethodOn(Method method, Object target) {
         return Arrays.stream(target.getClass().getMethods()).filter(m -> m.getName().equals(method.getName())).findFirst();
+    }
+
+    public void setCMPField(String name, Object value) {
+        this.cmpMap.put(name, value);
     }
 
 }

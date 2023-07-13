@@ -5,12 +5,17 @@
  */
 package mofokom.slee.testfw.mocks;
 
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.slee.ActivityContextInterface;
 import javax.slee.SLEEException;
 import javax.slee.SbbLocalObject;
 import javax.slee.TransactionRequiredLocalException;
 import javax.slee.TransactionRolledbackLocalException;
 import javax.slee.resource.ActivityHandle;
+import javax.transaction.RollbackException;
+import javax.transaction.SystemException;
+import javax.transaction.xa.XAException;
 
 /**
  *
@@ -39,15 +44,43 @@ public class MockActivityContextInterface<T> implements ActivityContextInterface
     }
 
     @Override
-    public void attach(SbbLocalObject slo) throws NullPointerException, TransactionRequiredLocalException, TransactionRolledbackLocalException, SLEEException {
-        mockSlee.sbbsA.get(handle).add(slo);
+    public void attach(final SbbLocalObject slo) throws NullPointerException, TransactionRequiredLocalException, TransactionRolledbackLocalException, SLEEException {
+        try {
+            mockSlee.txMgr.enlist((i) -> {
+                mockSlee.sbbsA.get(handle).add(slo);
+                return null;
+            });
+        } catch (XAException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (SystemException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IllegalStateException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (RollbackException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+            //TODO:
+        }
+
     }
 
     @Override
     public void detach(SbbLocalObject slo) throws NullPointerException, TransactionRequiredLocalException, TransactionRolledbackLocalException, SLEEException {
-        mockSlee.sbbsA.get(handle).remove(slo);
-        if (mockSlee.sbbsA.get(handle).isEmpty()) {
-            end();
+        try {
+            mockSlee.txMgr.enlist((i) -> {
+                mockSlee.sbbsA.get(handle).remove(slo);
+                if (mockSlee.sbbsA.get(handle).isEmpty()) {
+                    end();
+                }
+                return null;
+            });
+        } catch (XAException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (SystemException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IllegalStateException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (RollbackException ex) {
+            Logger.getLogger(MockActivityContextInterface.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
 
