@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -18,7 +19,6 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -33,6 +33,7 @@ import javax.slee.ActivityContextInterface;
 import javax.slee.Address;
 import javax.slee.EventContext;
 import javax.slee.EventTypeID;
+import javax.slee.RolledBackContext;
 import javax.slee.Sbb;
 import javax.slee.ServiceID;
 import javax.slee.SbbLocalObject;
@@ -56,6 +57,11 @@ import javax.slee.serviceactivity.ServiceActivity;
 import javax.slee.serviceactivity.ServiceActivityContextInterfaceFactory;
 import javax.slee.serviceactivity.ServiceActivityFactory;
 import javax.slee.serviceactivity.ServiceStartedEvent;
+import javax.transaction.HeuristicMixedException;
+import javax.transaction.HeuristicRollbackException;
+import javax.transaction.NotSupportedException;
+import javax.transaction.RollbackException;
+import javax.transaction.SystemException;
 import lombok.extern.slf4j.Slf4j;
 import mobi.mofokom.javax.slee.annotation.Service;
 import mobi.mofokom.javax.slee.annotation.event.ServiceStartedEventHandler;
@@ -65,6 +71,7 @@ import mofokom.slee.testfw.SleeLifecycle;
 import static mofokom.slee.testfw.mocks.MockResourceAdaptor.getAny;
 import mofokom.slee.testfw.resource.AnyEventHandler;
 import mofokom.slee.testfw.service.ServiceLifecycle;
+import org.apache.logging.log4j.core.appender.ConsoleAppender;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
@@ -136,6 +143,8 @@ public class MockSlee {
 
     public Map<ActivityHandle, Object> activityMap = new HashMap();
     public Map<ActivityHandle, Set<SbbLocalObject>> sbbsA = new HashMap();
+
+    MockSleeTransactionManager txMgr = new MockSleeTransactionManager();
 
     static {
 
@@ -260,8 +269,12 @@ public class MockSlee {
     //TODO: sbb handler methods
     public static void doCallRealMethods(MockSleeComponent target) throws Exception {
 
+        if (target == null) {
+            throw new NullPointerException("target cannot be null");
+        }
+
         if (target instanceof MockSbb) {
-            doCallRealMethods(((MockSbb) target).getSbb(), ((MockSbb) target).getSbbClass());
+            doCallRealMethods(((MockSbb) target).getSbb(), ((MockSbb) target).getSbbClass(), ((MockSbb) target).getSbbLocalObjectClass());
         } else {
             throw new UnsupportedOperationException(target.getClass().toString());
         }
@@ -273,7 +286,13 @@ public class MockSlee {
 
     public static void doCallRealMethods(Object target, Pattern[] patterns, Class... clazzz) throws Exception {
 
-        Arrays.asList(clazzz).forEach(clazz -> {
+        final List<String> mNames = new ArrayList<>();
+
+        Arrays.asList(clazzz).forEach((clazz) -> {
+            if (clazz == null) {
+                return;
+            }
+
             for (Method m : clazz.getDeclaredMethods()) {
                 if (m.getName().startsWith("ajc$")) {
                     continue;
@@ -285,29 +304,37 @@ public class MockSlee {
 
                     continue;
                 } else if (!clazz.isInterface() && Modifier.isAbstract(m.getModifiers())) {
-                    //log.warn("*****************" + m.toString());
+                    log.warn("abstract interface method " + m.toString() + " not being called");
                     continue;
 
                 } else if (m.getName().contains("access$") || Modifier.isPrivate(m.getModifiers()) || Modifier.isFinal(m.getModifiers()) || m.getModifiers() == 0) {
+                    log.warn("modifier " + m.toString() + " not being called");
                     continue;
                 }
+
                 if (Modifier.isProtected(m.getModifiers())) {
                     continue;
                 }
+
                 try {
                     doCallRealMethod(target, m);
+                    mNames.add(m.getName());
                 } catch (org.mockito.exceptions.misusing.UnfinishedStubbingException x) {
                     log.warn(target.getClass() + "matcher failed " + m.getDeclaringClass().getName() + ":" + m.getName());
+                } catch (InvocationTargetException | IllegalAccessException ex) {
+                    log.warn(m.getDeclaringClass().getName() + ":" + m.getName() + " " + ex.getMessage());
                 }
             }
         });
+        log.info(String.format("clazzz %1$s, methods %2$s", Arrays.asList(clazzz).toString(), mNames.toString()));
 
     }
 
-    public static void doCallRealMethod(Object target, Method m) {
+    public static void doCallRealMethod(Object target, Method m) throws InvocationTargetException, IllegalAccessException {
 
         Object o = null;
 
+        m.setAccessible(true);
         try {
             if (o == null) {
                 o = Mockito.doCallRealMethod().when(target);
@@ -319,7 +346,7 @@ public class MockSlee {
         }
     }
 
-    public static void doDangling(Object o, Object target, Method m) {
+    public static void doDangling(Object o, Object target, Method m) throws IllegalAccessException, InvocationTargetException {
 
         Object[] args = new Object[m.getParameterTypes().length];
         int p = 0;
@@ -330,12 +357,15 @@ public class MockSlee {
 
         slog.fine("completed dangling " + m.toString());
         try {
+            m.setAccessible(true);
             m.invoke(o, args);
             o = null;
         } catch (RuntimeException x) {
             slog.log(Level.WARNING, target.getClass() + " " + o.getClass() + " " + m.getDeclaringClass() + " " + m.toString() + " " + x.getClass() + " " + x.getMessage());
-        } catch (Exception x) {
+            throw x;
+        } catch (IllegalAccessException | InvocationTargetException x) {
             slog.log(Level.WARNING, target.getClass() + " " + o.getClass() + " " + m.getDeclaringClass() + " " + m.toString() + " " + x.getClass() + " " + x.getMessage());
+            throw x;
         }
 
     }
@@ -431,7 +461,7 @@ public class MockSlee {
                     } catch (Exception ex) {
                         Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
                     }
-                    return null;
+                    throw new IllegalCallerException(clazz.getName());
                 }).findFirst().get();
             } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.event.EventType.class)) {
 
@@ -469,7 +499,7 @@ public class MockSlee {
             } else if (a.annotationType().equals(mobi.mofokom.javax.slee.annotation.UsageParameter.class)) {
             }
         }
-        return null;
+        throw new IllegalCallerException(clazz.getName());
     }
 
     public void start() throws NamingException {
@@ -512,6 +542,7 @@ public class MockSlee {
                 doReturn(activity).when(aci).getActivity();
                 EventContext ec = new MockEventContext(event, aci, null, serviceId);
                 FireableEventType fet = new MockFireableEventType(eventType, event);
+
                 try {
                     deliverEvent(sbb, fet, aci, ec);
                     serviceState.put(serviceId, ServiceLifecycle.ACTIVE);
@@ -699,13 +730,13 @@ public class MockSlee {
         }
     }
 
-    /**
     public static void setLogger(String name, String level) {
         Logger logger = LogManager.getLogManager().getLogger(name);
         if (logger != null) {
             logger.setLevel(commonsLevel(level));
         }
 
+        /**
         org.apache.log4j.Logger logger2 = org.apache.log4j.Logger.getLogger(name);
         if (logger2 != null) {
             logger2.setLevel(org.apache.log4j.Level.toLevel(level));
@@ -721,8 +752,9 @@ public class MockSlee {
             }
 
         }
+        */
     }
-     **/
+
     public void deliverEvent(FireableEventType eventType, ActivityContextInterface aci, EventContext ec) throws MultiException, UnhandledEventException {
         final List<Throwable> e = new ArrayList<>();
         final List<Boolean> h = new ArrayList<>();
@@ -778,7 +810,11 @@ public class MockSlee {
     }
 
     public boolean deliverEvent(MockSbb mockSbb, FireableEventType eventType, ActivityContextInterface aci, EventContext ec) throws IllegalAccessException, InvocationTargetException {
-
+        try {
+            txMgr.beginSleeTransaction();
+        } catch (NotSupportedException | SystemException ex) {
+            Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
+        }
         Sbb sbb = mockSbb.getSbb();
         Class clazz = mockSbb.getSbbClass();
         Annotation[] annotations = clazz.getAnnotations();
@@ -816,12 +852,60 @@ public class MockSlee {
         if (hm.isPresent()) {
             log.info("handled " + tNvv + " on " + clazz);
             //TODO: create //load //passivate
-            this.callSbb(sbb, hm.get(), eventType, aci, ec);
+
+            RolledBackContext rbc = new RolledBackContext() {
+                @Override
+                public Object getEvent() {
+                    return ec.getEvent();
+                }
+
+                @Override
+                public ActivityContextInterface getActivityContextInterface() {
+                    return aci;
+                }
+
+                @Override
+                public boolean isRemoveRolledBack() {
+                    return true;
+                }
+            };
+
+            try {
+                this.callSbb(sbb, hm.get(), eventType, aci, ec);
+
+                if (mockSbb.sbbContext.getRollbackOnly()) {
+                    txMgr.rollback();
+                    throw new RollbackException("rollback only flag set");
+                }
+
+                txMgr.commit();
+
+            } catch (RollbackException | HeuristicMixedException | HeuristicRollbackException | SecurityException | IllegalStateException | SystemException x) {
+                log.error(x.getMessage(), x);
+                sbb.sbbRolledBack(rbc);
+            } catch (Exception x) {
+                log.error(x.getMessage(), x);
+                try {
+                    sbb.sbbRolledBack(rbc);
+                    sbb.sbbExceptionThrown(x, ec.getEvent(), aci);
+                } catch (Exception x2) {
+                    log.error("rollback failed with " + x.getMessage(), x);
+                    sbb.sbbExceptionThrown(x2, ec.getEvent(), aci);
+                }
+            }
+
+            try {
+                log.info("slee transaction status " + StatusEnum.from(txMgr.getStatus()).name());
+            } catch (SystemException ex) {
+                Logger.getLogger(MockSlee.class.getName()).log(Level.SEVERE, null, ex);
+            }
+
             return true;
         } else {
             log.info("no handler for " + tNvv + " on " + clazz);
             return false;
         }
+
     }
 
     public void callSbb(Sbb sbb, Method m, FireableEventType eventType, ActivityContextInterface aci, EventContext ec) throws IllegalAccessException, IllegalArgumentException, InvocationTargetException {
@@ -829,10 +913,12 @@ public class MockSlee {
         Object event = ec.getEvent();
         assertNotNull(event, "event can't be null");
         assertNotNull(aci, "aci can't be null");
+        assertNotNull(sbb);
         Class[] p = m.getParameterTypes();
         log.info("calling " + m.toString());
         if (p[0].isAssignableFrom(event.getClass()) && p[1].equals(ActivityContextInterface.class)) {
             log.info("invoking " + m.toGenericString());
+            m.setAccessible(true);
             if (p.length == 2) {
                 m.invoke(sbb, new Object[]{event, aci});
             } else if (p.length == 3) {
